@@ -92,6 +92,16 @@ class Migtar:
         if os.path.exists(self.EFI):
             run_cmd('rm -rf ' + self.EFI)
 
+    def __generate_md5(self, inputpath):
+        if os.path.isfile(inputpath):
+            filename = os.path.basename(inputpath)
+            if not str(filename).endswith(".md5sum"):
+                run_cmd("echo $(md5sum " + inputpath + " | cut -d' ' -f1) > " + inputpath + ".md5sum")
+            return
+        for path in os.listdir(inputpath):
+            abspath = os.path.join(inputpath, path)
+            self.__generate_md5(abspath)
+
     def create_migration_tar(self, workspace_path, input_image):
         logger.debug("Workspace Path = %s and Iso name = %s"
                      % (workspace_path, input_image))
@@ -174,13 +184,18 @@ class Migtar:
         GRUB_CFG_FILE=self.GRUB_DIR + "grub.cfg"
         logger.debug("Grub Config file: %s" % GRUB_CFG_FILE)
         with open(GRUB_CFG_FILE, 'w') as f:
-	        f.write(self.GRUB_CFG)
+                f.write(self.GRUB_CFG)
 
         run_cmd( "rm -rf " + self.BOOT_DIR)
         run_cmd ("mv " + self.TMP_BOOT_DIR + " " + self.BOOT_DIR)
 
-        logger.debug("tar -cvf " + self.dst_system_tar + " " + self.BOOT_DIR + " " + self.GRUB_DIR + " " + dst_system_image)
-        run_cmd("tar -cvf " + self.dst_system_tar + " " + self.BOOT_DIR + " " + self.GRUB_DIR + " " + dst_system_image)
+        self.__generate_md5(os.path.abspath(self.BOOT_DIR))
+        self.__generate_md5(os.path.abspath(self.GRUB_DIR))
+        self.__generate_md5(os.path.abspath(dst_system_image))
+
+        logger.debug("tar -cvf " + self.dst_system_tar + " " + self.BOOT_DIR + " " + self.GRUB_DIR + " " + dst_system_image + " " + dst_system_image + ".md5sum")
+        run_cmd("tar -cvf " + self.dst_system_tar + " " + self.BOOT_DIR + " " + self.GRUB_DIR + " " + dst_system_image + " " + dst_system_image + ".md5sum")
+ 
 
     def __enter__(self):
         return self
@@ -722,7 +737,7 @@ class Rpmdb:
         if len(all_hostos_base_rpms):
             logger.info("\nSkipping following host os base rpm(s) "
                         "from repository:\n")
-            for rpm in all_hostos_base_rpms:	
+            for rpm in all_hostos_base_rpms:
                 logger.info("\t(-) %s" % rpm.file_name)
 
         map(self.csc_rpm_list.remove, all_hostos_base_rpms)
@@ -731,7 +746,7 @@ class Rpmdb:
         if len(all_spirit_boot_base_rpms):
             logger.info("\nSkipping following spirit-boot base rpm(s) "
                         "from repository:\n")
-            for rpm in all_spirit_boot_base_rpms:	
+            for rpm in all_spirit_boot_base_rpms:
                 logger.info("\t(-) %s" % rpm.file_name)
         map(self.csc_rpm_list.remove, all_spirit_boot_base_rpms)
         map(self.rpm_list.remove, all_spirit_boot_base_rpms)
@@ -800,7 +815,7 @@ class Rpmdb:
 
         if len(discarded_hostos_rpms):
             logger.info("\nSkipping following older version of host os rpm(s) from repository:\n")
-            for rpm in discarded_hostos_rpms:	
+            for rpm in discarded_hostos_rpms:
                 logger.info("\t(-) %s" % rpm.file_name)
 
         map(self.csc_rpm_list.remove, discarded_hostos_rpms)
@@ -815,7 +830,7 @@ class Rpmdb:
 
         if len(discarded_spiritboot_rpms):
             logger.info("\nSkipping following older version of spirit-boot rpm(s) from repository:\n")
-            for rpm in discarded_spiritboot_rpms:	
+            for rpm in discarded_spiritboot_rpms:
                 logger.info("\t(-) %s" % rpm.file_name)
         map(self.csc_rpm_list.remove, discarded_spiritboot_rpms)
         map(self.rpm_list.remove, discarded_spiritboot_rpms)
@@ -953,15 +968,19 @@ class Rpmdb:
                                           set(missing_tp_rpm_list[arch]))
         return missing_rpm_list
 
-def system_resourse_check():
+def system_resource_check():
     rc = 0
     tools = ['mount', 'rm', 'cp', 'umount', 'zcat', 'chroot', 'mkisofs']
     logger.debug("\nPerforming System requirements check...")
 
     if sys.version_info < (2, 7):
-        logger.error("Error: Must use python version 2.7")
+        logger.error("Error: This tool requires Python version 2.7 or higher.")
         sys.exit(-1)
         
+    if sys.version_info > (3, 0):
+        logger.error("Error: This tool does not work with python 3.x.")
+        sys.exit(-1)
+
     disk = os.statvfs(cwd)
     total_avail_space = float(disk.f_bavail*disk.f_frsize)
     total_avail_space_gb = total_avail_space/1024/1024/1024
@@ -1110,6 +1129,9 @@ class Iso(object):
                 elif 'netbase' in line:
                     logger.debug("Ignoring false dependancy")
                     continue
+                elif 'signature: NOKEY' in line :
+                    logger.debug("Ignoring RPM signing ")
+                    continue
                 else: 
                     err_log.append(line)
             if len(err_log) != 0:
@@ -1138,7 +1160,7 @@ class Iso(object):
 
 
 class Giso:
-    SUPPORTED_PLATFORMS = ["asr9k", "ncs1k", "ncs5k", "ncs5500"]
+    SUPPORTED_PLATFORMS = ["asr9k", "ncs1k", "ncs5k", "ncs5500", "ncs6k", "ncs540"]
     SUPPORTED_BASE_ISO = ["mini", "minik9"]
     SMU_CONFIG_SUMMARY_FILE = "giso_summary.txt"
     VM_TYPE = ["XR", "CALVADOS", "HOST"]
@@ -1146,6 +1168,7 @@ class Giso:
     GOLDEN_STRING = "golden"
     GOLDEN_K9_STRING = "goldenk9"
     GISO_INFO_TXT = "giso_info.txt"
+    NESTED_ISO_PLATFORMS = ["ncs5500", "ncs540"] 
 
     def __init__(self):
         self.repo_path = None
@@ -1169,7 +1192,7 @@ class Giso:
         self.bundle_iso = Iso() 
         self.bundle_iso.set_iso_info(iso_path)
         plat = self.get_bundle_iso_platform_name()
-        if "ncs5500" in plat:
+        if plat in Giso.NESTED_ISO_PLATFORMS:
             logger.debug("Skipping the top level iso wrapper")
             iso_wrapper_fsroot = self.get_bundle_iso_extract_path()
             logger.debug("Iso top initrd path %s" % iso_wrapper_fsroot)
@@ -1412,7 +1435,8 @@ class Giso:
         # outer iso would be used as place holder. So here we exited from 
         # earlier mounted internal system_image.iso and setting the new mount 
         # path as outer iso mount point
-        if "ncs5500" in self.get_bundle_iso_platform_name():
+        plat = self.get_bundle_iso_platform_name()
+        if plat in Giso.NESTED_ISO_PLATFORMS:
             self.bundle_iso.__exit__(None, None, None)
             self.bundle_iso = Iso() 
             self.bundle_iso.set_iso_info(iso_path)
@@ -1773,9 +1797,9 @@ if __name__ == "__main__":
     logger.addHandler(ch)
     logger.debug("##############START#####################")
     try:
+        system_resource_check()
         args = parsecli()
         logger.info("Golden ISO build process starting...")
-        system_resourse_check()
         main(args)
         logger.debug("Exiting normally")
         logger.info("\nDetail logs: %s" % logfile)
