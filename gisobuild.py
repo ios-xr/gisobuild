@@ -4,7 +4,7 @@
 #
 # utility to build golden iso
 #
-# Copyright (c) 2015-2017 by cisco Systems, Inc.
+# Copyright (c) 2015-2018 by Cisco Systems, Inc.
 # All rights reserved.
 # =============================================================================
 from datetime import datetime
@@ -21,13 +21,24 @@ import subprocess
 import sys
 import tempfile
 import yaml
+import commands
+import stat
+import pprint
 
-__version__ = '0.7'
+__version__ = '0.10'
 GISO_PKG_FMT_VER = 1.0
 
-# Minimum 3 GB Disk Space 
+try:
+    from itertools import zip_longest
+except ImportError:
+    from itertools import izip_longest as zip_longest
+_subfield_pattern = re.compile(
+    r'(?P<junk>[^a-zA-Z0-9]*)((?P<text>[a-zA-Z]+)|(?P<num>[0-9]+))'
+)
+
+# Minimum 6 GB Disk Space 
 # required for building GISO
-MIN_DISK_SPACE_SIZE_REQUIRED = 3 
+MIN_DISK_SPACE_SIZE_REQUIRED = 6 
 MAX_RPM_SUPPORTED_BY_INSTALL = 128 
 SPIRIT_BOOT_SUBSTRING = 'spirit-boot'
 SYSADMIN_SUBSTRING = 'SYSADMIN'
@@ -38,7 +49,13 @@ ADMIN_SUBSTRING = 'ADMIN'
 HOST_SUBSTRING = 'HOST'
 SMU_SUBSTRING = 'SMU'
 XR_SUBSTRING = 'XR'
-
+OPTIONS = None
+CER_TAR_FILE = "/ws/skewat-bgl/platform_cer.tar"
+DEFAULT_RPM_PATH = 'giso/<rpms>'
+SIGNED_RPM_PATH =  'giso/boot/initrd.img/<rpms>'
+SIGNED_NCS5500_RPM_PATH =  'giso/boot/initrd.img/iso/system_image.iso/boot/initrd.img/<rpms>'
+SIGNED_651_NCS5500_RPM_PATH = 'giso/boot/initrd.img/iso/system_image.iso/<rpms>'
+OPTIMIZE_CAPABLE = os.path.exists('/sw/packages/jam_IOX/signing/xr_sign')
 
 def run_cmd(cmd):
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, 
@@ -92,6 +109,16 @@ class Migtar:
         if os.path.exists(self.EFI):
             run_cmd('rm -rf ' + self.EFI)
 
+    def __generate_md5(self, inputpath):
+        if os.path.isfile(inputpath):
+            filename = os.path.basename(inputpath)
+            if not str(filename).endswith(".md5sum"):
+                run_cmd("echo $(md5sum " + inputpath + " | cut -d' ' -f1) > " + inputpath + ".md5sum")
+            return
+        for path in os.listdir(inputpath):
+            abspath = os.path.join(inputpath, path)
+            self.__generate_md5(abspath)
+
     def create_migration_tar(self, workspace_path, input_image):
         logger.debug("Workspace Path = %s and Iso name = %s"
                      % (workspace_path, input_image))
@@ -139,7 +166,8 @@ class Migtar:
             sys.exit(-1)
 
         logger.debug("Getting BOOT_DIR(%s) " % self.BOOT_DIR)
-        run_cmd("zcat " + TMP_INITRD + " | cpio -id " + self.BOOT_DIR + "/*");
+        run_cmd("zcat " + TMP_INITRD + " | cpio -id " + self.BOOT_DIR + "/*")
+        run_cmd("chmod -R 777 %s"%(self.BOOT_DIR))
 
         logger.debug("Deleting tmp path (%s) in workspace path" 
                      %  workspace_path + "/tmp")
@@ -179,8 +207,13 @@ class Migtar:
         run_cmd( "rm -rf " + self.BOOT_DIR)
         run_cmd ("mv " + self.TMP_BOOT_DIR + " " + self.BOOT_DIR)
 
-        logger.debug("tar -cvf " + self.dst_system_tar + " " + self.BOOT_DIR + " " + self.GRUB_DIR + " " + dst_system_image)
-        run_cmd("tar -cvf " + self.dst_system_tar + " " + self.BOOT_DIR + " " + self.GRUB_DIR + " " + dst_system_image)
+        self.__generate_md5(os.path.abspath(self.BOOT_DIR))
+        self.__generate_md5(os.path.abspath(self.GRUB_DIR))
+        self.__generate_md5(os.path.abspath(dst_system_image))
+
+        logger.debug("tar -cvf " + self.dst_system_tar + " " + self.BOOT_DIR + " " + self.GRUB_DIR + " " + dst_system_image + " " + dst_system_image + ".md5sum")
+        run_cmd("tar -cvf " + self.dst_system_tar + " " + self.BOOT_DIR + " " + self.GRUB_DIR + " " + dst_system_image + " " + dst_system_image + ".md5sum")
+ 
 
     def __enter__(self):
         return self
@@ -213,12 +246,13 @@ class Rpm:
 
     def populate_mdata(self, fs_root, rpm):
         self.file_name = rpm
+        # Some RPMs(k9) dont have read access which causes RPM query fail 
+        run_cmd(" chmod 644 %s"%(os.path.join(fs_root,rpm)))
         result = run_cmd("chroot "+fs_root+" rpm -qp --qf '%{NAME};%{VERSION};"
-                         "%{RELEASE};%{ARCH};%{PACKAGETYPE};%{PACKAGEPRESENCE};"
-                         "%{PIPD};%{CISCOHW};%{CARDTYPE};%{BUILDTIME};"
-                         "%{GROUP};%{VMTYPE};%{SUPPCARDS};%{PREFIXES};"
-                         "%{XRRELEASE};' "+rpm)
-
+            "%{RELEASE};%{ARCH};%{PACKAGETYPE};%{PACKAGEPRESENCE};"
+            "%{PIPD};%{CISCOHW};%{CARDTYPE};%{BUILDTIME};"
+            "%{GROUP};%{VMTYPE};%{SUPPCARDS};%{PREFIXES};"
+            "%{XRRELEASE};' "+rpm)
         result_str_list = result["output"].split(";")
         self.name = result_str_list[0]
         self.version = result_str_list[1]
@@ -736,6 +770,72 @@ class Rpmdb:
         map(self.csc_rpm_list.remove, all_spirit_boot_base_rpms)
         map(self.rpm_list.remove, all_spirit_boot_base_rpms)
 
+    def _iter_rpm_subfields(self, field):
+        """Yield subfields as 2-tuples that sort in the desired order
+
+        Text subfields are yielded as (0, text_value)
+        Numeric subfields are yielded as (1, int_value)
+        """
+        for subfield in _subfield_pattern.finditer(field):
+            text = subfield.group('text')
+            if text is not None:
+                yield (0, text)
+            else:
+                yield (1, int(subfield.group('num')))
+
+    def _compare_rpm_field(self, lhs, rhs):
+        # Short circuit for exact matches (including both being None)
+        if lhs == rhs:
+            return 0
+        # Otherwise assume both inputs are strings
+        lhs_subfields = self._iter_rpm_subfields(lhs)
+        rhs_subfields = self._iter_rpm_subfields(rhs)
+        for lhs_sf, rhs_sf in zip_longest(lhs_subfields, rhs_subfields):
+            if lhs_sf == rhs_sf:
+                # When both subfields are the same, move to next subfield
+                continue
+            if lhs_sf is None:
+                # Fewer subfields in LHS, so it's less than/older than RHS
+                return -1
+            if rhs_sf is None:
+                # More subfields in LHS, so it's greater than/newer than RHS
+                return 1
+            # Found a differing subfield, so it determines the relative order
+            return -1 if lhs_sf < rhs_sf else 1
+        # No relevant differences found between LHS and RHS
+        return 0
+
+    def _compare_rpm_labels(self, lhs, rhs):
+        lhs_epoch, lhs_version, lhs_release = lhs
+        rhs_epoch, rhs_version, rhs_release = rhs
+        result = self._compare_rpm_field(lhs_epoch, rhs_epoch)
+        if result:
+            return result
+        result = self._compare_rpm_field(lhs_version, rhs_version)
+        if result:
+            return result
+        return self._compare_rpm_field(lhs_release, rhs_release)
+
+    def filter_superseded_rpms(self):
+        count = 0
+        latest_smu = {}
+        for pkg in self.csc_rpm_list :
+            count = count + 1
+            print "[%2d] %s "%(count,pkg.file_name)
+            key = "%s.%s.%s.%s"%(pkg.name, pkg.package_type, pkg.arch, pkg.vm_type)
+            if latest_smu.has_key(key):
+                p_v = latest_smu[key].version
+                p_r = latest_smu[key].release
+                t_v = pkg.version
+                t_r = pkg.release
+                if self._compare_rpm_labels([0,p_v,p_r],[0,t_v,t_r]) < 0 :
+                    latest_smu[key] = pkg
+            else :
+                latest_smu[key] = pkg
+
+        self.csc_rpm_list = [ latest_smu[key] for key in latest_smu.keys() ]
+
+
     def validate_associate_hostos_rpms(self, all_hostos_rpms):
         for rpm in all_hostos_rpms:
             associate_rpm_present = False
@@ -953,15 +1053,19 @@ class Rpmdb:
                                           set(missing_tp_rpm_list[arch]))
         return missing_rpm_list
 
-def system_resourse_check():
+def system_resource_check(args):
     rc = 0
     tools = ['mount', 'rm', 'cp', 'umount', 'zcat', 'chroot', 'mkisofs']
     logger.debug("\nPerforming System requirements check...")
 
     if sys.version_info < (2, 7):
-        logger.error("Error: Must use python version 2.7")
+        logger.error("Error: This tool requires Python version 2.7 or higher.")
         sys.exit(-1)
         
+    if sys.version_info > (3, 0):
+        logger.error("Error: This tool does not work with python 3.x.")
+        sys.exit(-1)
+
     disk = os.statvfs(cwd)
     total_avail_space = float(disk.f_bavail*disk.f_frsize)
     total_avail_space_gb = total_avail_space/1024/1024/1024
@@ -989,7 +1093,7 @@ def system_resourse_check():
         logger.error("\nError: System requirements check [FAIL]")
         sys.exit(-1)
 
-    elif os.getuid() != 0:
+    elif os.getuid() != 0 and (OPTIMIZE_CAPABLE and not args.optimize) :
         logger.error("\nError: User does not have root priviledges")
         sys.exit(-1)
 
@@ -1013,16 +1117,17 @@ class Iso(object):
         self.iso_rpms = None
         self.iso_extract_path = None
         self.iso_platform_name = None
+        self.system_image_extract_path = None
 
     def set_iso_info(self, iso_path):
-        if os.system("losetup -f &> /dev/null") != 0:
-            logger.error("No free loop device available for mouting ISO")
-            sys.exit(-1)
+        #if os.system("losetup -f &> /dev/null") != 0:
+        #    logger.error("No free loop device available for mouting ISO")
+        #    sys.exit(-1)
           
         pwd = cwd
         self.iso_path = iso_path
         self.iso_mount_path = tempfile.mkdtemp(dir=pwd)      
-        run_cmd("mount -o loop %s %s" % (self.iso_path, self.iso_mount_path))
+        readiso(self.iso_path, self.iso_mount_path)
         iso_info_file = open("%s/%s" % (self.iso_mount_path, Iso.ISO_INFO_FILE),
                              'r')
         iso_info_raw = iso_info_file.read()
@@ -1059,6 +1164,7 @@ class Iso(object):
                 os.chdir(self.iso_extract_path)
                 run_cmd("zcat -f %s%s | cpio -id" % (self.iso_mount_path,
                         Iso.ISO_INITRD_RPATH))
+                run_cmd("chmod -R 777 ./")
                 os.chdir(pwd)
             else:
                 logger.error("Error: Couldn't create directory for extarcting initrd")
@@ -1091,6 +1197,7 @@ class Iso(object):
             rpm_file_list = "%s/rpms/%s  " % (rpm_file_list, 
                                               os.path.basename(rpm))
         try:
+            run_cmd("chmod 644 %s/rpms/*.rpm"%(self.iso_extract_path))
             run_cmd("chroot %s %s %s" % (self.iso_extract_path, Iso.RPM_OPTIONS,
                     rpm_file_list))
         except Exception as e:
@@ -1110,6 +1217,9 @@ class Iso(object):
                 elif 'netbase' in line:
                     logger.debug("Ignoring false dependancy")
                     continue
+                elif 'signature: NOKEY' in line :
+                    logger.debug("Ignoring RPM signing ")
+                    continue
                 else: 
                     err_log.append(line)
             if len(err_log) != 0:
@@ -1127,25 +1237,25 @@ class Iso(object):
             if self.iso_extract_path and os.path.exists(self.iso_extract_path):
                 logger.debug("iso extract path %s" % self.iso_extract_path)
                 shutil.rmtree(self.iso_extract_path)
+            if self.system_image_extract_path and os.path.exists(self.system_image_extract_path):
+                logger.debug("iso extract path %s" % self.system_image_extract_path)
+                shutil.rmtree(self.system_image_extract_path)
             if self.iso_mount_path and os.path.exists(self.iso_mount_path):
-                if os.path.ismount(self.iso_mount_path):
-                    run_cmd(" umount " + self.iso_mount_path)
-                    logger.debug("Unmounted iso successfully %s" % 
-                                 self.iso_mount_path)
                 shutil.rmtree(self.iso_mount_path)
         except (IOError, os.error) as why:
             logger.error("Exception why ? = " + str(why))
 
-
 class Giso:
-    SUPPORTED_PLATFORMS = ["asr9k", "ncs1k", "ncs5k", "ncs5500"]
+    SUPPORTED_PLATFORMS = ["asr9k", "ncs1k", "ncs5k", "ncs5500", "ncs6k", "ncs560","ncs540", 'iosxrwb']
     SUPPORTED_BASE_ISO = ["mini", "minik9"]
     SMU_CONFIG_SUMMARY_FILE = "giso_summary.txt"
+    ISO_INFO_FILE = "iso_info.txt"
     VM_TYPE = ["XR", "CALVADOS", "HOST"]
     XR_CONFIG_FILE_NAME = "router.cfg"
     GOLDEN_STRING = "golden"
     GOLDEN_K9_STRING = "goldenk9"
     GISO_INFO_TXT = "giso_info.txt"
+    NESTED_ISO_PLATFORMS = ["ncs5500", "ncs560", "ncs540"]
 
     def __init__(self):
         self.repo_path = None
@@ -1161,6 +1271,9 @@ class Giso:
         self.k9sec_present = False
         self.giso_ver_label = 0 
         self.is_tar_require = False
+        self.iso_wrapper_fsroot = None
+        self.platform = None
+        self.giso_rpm_path = DEFAULT_RPM_PATH
     #
     # Giso object Setter Api's
     #
@@ -1169,12 +1282,23 @@ class Giso:
         self.bundle_iso = Iso() 
         self.bundle_iso.set_iso_info(iso_path)
         plat = self.get_bundle_iso_platform_name()
-        if "ncs5500" in plat:
+        if OPTIMIZE_CAPABLE and not args.optimize:
+            self.giso_rpm_path = DEFAULT_RPM_PATH
+        elif plat in Giso.NESTED_ISO_PLATFORMS :
+            # This was interim change for 651 release for fretta only
+            if "6.5.1." in self.bundle_iso.get_iso_version() or '6.5.1' == self.bundle_iso.get_iso_version():  
+                print self.bundle_iso.get_iso_version()
+                self.giso_rpm_path = SIGNED_651_NCS5500_RPM_PATH
+            else :
+                self.giso_rpm_path = SIGNED_NCS5500_RPM_PATH
+        else :
+            self.giso_rpm_path = SIGNED_RPM_PATH
+        if plat in Giso.NESTED_ISO_PLATFORMS:
             logger.debug("Skipping the top level iso wrapper")
-            iso_wrapper_fsroot = self.get_bundle_iso_extract_path()
-            logger.debug("Iso top initrd path %s" % iso_wrapper_fsroot)
+            self.iso_wrapper_fsroot = self.get_bundle_iso_extract_path()
+            logger.debug("Iso top initrd path %s" % self.iso_wrapper_fsroot)
             self.system_image = "%s/system_image.iso" % cwd
-            shutil.copyfile("%s/iso/system_image.iso" % iso_wrapper_fsroot,
+            shutil.copyfile("%s/iso/system_image.iso" % self.iso_wrapper_fsroot,
                             self.system_image)
             logger.debug("Intermal System_image.iso %s"
                          % iso_path)
@@ -1218,7 +1342,9 @@ class Giso:
         return self.bundle_iso.get_iso_version()
 
     def get_bundle_iso_platform_name(self):
-        return self.bundle_iso.get_iso_platform_name()
+        if not self.platform : 
+            self.platform = self.bundle_iso.get_iso_platform_name()
+        return self.platform
 
     def get_bundle_iso_extract_path(self):
         return self.bundle_iso.get_iso_extract_path()
@@ -1348,6 +1474,7 @@ class Giso:
 
         with open("%s/%s" % (self.giso_dir, Giso.GISO_INFO_TXT), 'w') as f:
             f.write(giso_info)
+            f.write("RPM_PATH:  %s"%(self.giso_rpm_path))
             rpms_list = []
             for vm_type in Giso.VM_TYPE:
                 vm_type_meta = vm_type.lower()
@@ -1371,9 +1498,12 @@ class Giso:
         fd.write(yaml.dump(mdata, default_flow_style=False))
         fd.close()
 
-        self.giso_name = '%s.%s-%s.%s' % (giso_name_string, "iso",
+        #self.giso_name = '%s.%s-%s.%s' % (giso_name_string, "iso",
+        #                                  iso.get_iso_version(), 
+        #                                  self.giso_ver_label)
+        self.giso_name = '%s-%s-%s.%s' % (giso_name_string,
                                           iso.get_iso_version(), 
-                                          self.giso_ver_label)
+                                          self.giso_ver_label, "iso")
 
     def update_grub_cfg(self, iso):
         # update grub.cfg file with giso_boot parameter 
@@ -1412,7 +1542,8 @@ class Giso:
         # outer iso would be used as place holder. So here we exited from 
         # earlier mounted internal system_image.iso and setting the new mount 
         # path as outer iso mount point
-        if "ncs5500" in self.get_bundle_iso_platform_name():
+        plat = self.get_bundle_iso_platform_name()
+        if plat in Giso.NESTED_ISO_PLATFORMS:
             self.bundle_iso.__exit__(None, None, None)
             self.bundle_iso = Iso() 
             self.bundle_iso.set_iso_info(iso_path)
@@ -1420,25 +1551,27 @@ class Giso:
         shutil.copytree(self.bundle_iso.get_iso_mount_path(), self.giso_dir)
 
         logger.info("Summary .....")
-        for vm_type in Giso.VM_TYPE:
-            rpm_files = self.vm_rpm_file_paths[vm_type]
-            if rpm_files is not None:
-                # if rpm_files and (len(rpm_files) != 0):
-                giso_repo_path = "%s/%s_rpms" % (self.giso_dir, 
-                                                 str(vm_type).lower())
-                os.mkdir(giso_repo_path)
-                if vm_type == CALVADOS_SUBSTRING:
-                    vm_type = SYSADMIN_SUBSTRING
-                logger.info("\n%s rpms:" % vm_type)
-
-                for rpm_file in rpm_files:
-                    rpm_count += 1
-                    shutil.copy('%s/%s' % (self.repo_path, rpm_file),
-                                giso_repo_path)
-                    logger.info('\t%s' % (os.path.basename(rpm_file)))
-                    rpms = True
-                    if "-k9sec-" in rpm_file:
-                        self.k9sec_present = True
+        with open('rpms_packaged_in_giso.txt',"w") as fdr:
+            for vm_type in Giso.VM_TYPE:
+                rpm_files = self.vm_rpm_file_paths[vm_type]
+                if rpm_files is not None:
+                    # if rpm_files and (len(rpm_files) != 0):
+                    giso_repo_path = "%s/%s_rpms" % (self.giso_dir, 
+                                                     str(vm_type).lower())
+                    os.mkdir(giso_repo_path)
+                    if vm_type == CALVADOS_SUBSTRING:
+                        vm_type = SYSADMIN_SUBSTRING
+                    logger.info("\n%s rpms:" % vm_type)
+    
+                    for rpm_file in rpm_files:
+                        rpm_count += 1
+                        shutil.copy('%s/%s' % (self.repo_path, rpm_file),
+                                    giso_repo_path)
+                        logger.info('\t%s' % (os.path.basename(rpm_file)))
+                        fdr.write("%s\n"%os.path.basename(rpm_file))
+                        rpms = True
+                        if "-k9sec-" in rpm_file:
+                            self.k9sec_present = True
 
         if rpm_count > MAX_RPM_SUPPORTED_BY_INSTALL:
             logger.error("\nError: Total number of supported rpms in the "
@@ -1465,11 +1598,112 @@ class Giso:
             self.update_grub_cfg(self.bundle_iso)
             shutil.copy(logfile, '%s/%s' % (self.giso_dir, 
                                             Giso.SMU_CONFIG_SUMMARY_FILE))
-            run_cmd('mkisofs -R -b boot/grub/stage2_eltorito -no-emul-boot \
+
+
+            if OPTIMIZE_CAPABLE and args.optimize:
+                # If optimised GISO, 
+                # 1. push RPMs in system_image
+                # 2. recreate initrd
+                # 3. Sign initrd
+                # 4. Move new signature and initrd in this dir 
+                # 5. Create Giso
+                self.build_system_image()
+                self.recreate_inird()
+                self.update_signature()
+                cmd = "mkisofs -R -b boot/grub/stage2_eltorito -no-emul-boot \
+                    -boot-load-size 4 -boot-info-table -o %s %s" % (self.giso_name, self.giso_dir)
+                run_cmd(cmd)
+            else :
+                run_cmd('mkisofs -R -b boot/grub/stage2_eltorito -no-emul-boot \
                     -boot-load-size 4 -boot-info-table -o %s %s'
                     % (self.giso_name, self.giso_dir))
         return 0
             
+    def build_system_image(self):
+        """ extract system_image """
+
+        pwd = cwd
+        self.system_image_extract_path = tempfile.mkdtemp(dir=pwd)
+
+        if self.system_image_extract_path is not None:
+            readiso(self.system_image, self.system_image_extract_path)
+            os.chdir(self.system_image_extract_path)
+
+            # Move the RPMS to system_image.iso content
+            run_cmd("mv  -f %s/*_rpms %s " % (self.giso_dir, self.system_image_extract_path))
+
+            # Move giso metadata to system_image.iso content
+            run_cmd("cp  -f %s/giso_* %s " % (self.giso_dir, self.system_image_extract_path))
+            run_cmd("cp  -f %s/*.yml %s " % (self.giso_dir, self.system_image_extract_path))
+            
+            # update iso_info.txt file with giso name
+            with open("%s/%s" % (self.system_image_extract_path, self.bundle_iso.ISO_INFO_FILE), 'r') as f:
+                iso_info_raw = f.read()
+                # Replace the iso name with giso string
+                iso_info_raw = iso_info_raw.replace(self.bundle_iso.iso_name, self.giso_name)
+            fd = open("%s/%s" % (self.system_image_extract_path, self.bundle_iso.ISO_INFO_FILE), 'w')
+            fd.write(iso_info_raw)
+            fd.close()
+            os.chdir(pwd)
+
+            # Recreate system_image.iso
+            cmd = "mkisofs -R -b boot/grub/stage2_eltorito -no-emul-boot -boot-load-size 4 -boot-info-table -o new_system_image.iso %s"%(self.system_image_extract_path)
+            run_cmd(cmd)
+             
+            # Cleanup
+            shutil.rmtree(self.system_image_extract_path)
+            run_cmd("mv new_system_image.iso %s"%(self.system_image))
+        else:
+            logger.error("Error: Couldn't create directory for extarcting initrd")
+            sys.exit(-1)
+
+    def recreate_inird(self):
+        """ Extract initrd and add RPMs and metadatafile """
+        pwd = cwd
+        extracted_bundle_path = self.get_bundle_iso_extract_path()
+        new_initrd_path = tempfile.mkdtemp(dir=pwd)      
+        run_cmd("cp -fr %s/* %s " % (extracted_bundle_path, new_initrd_path))
+        #over write with new system_image
+        run_cmd("cp %s %s/iso/"%(self.system_image,new_initrd_path))
+        os.chdir(new_initrd_path)
+        cmd = "find . | cpio -o -H newc | gzip > %s/boot/initrd.img"%(self.giso_dir)
+        run_cmd(cmd)
+        os.chdir(pwd)
+        # Cleanup
+        shutil.rmtree(new_initrd_path)
+
+    def update_signature(self):
+        """ Pretend to be in workspace as thats a requirement for signing and 
+            get platforms .cer and .der files
+        """
+        
+        XR_SIGN = "/sw/packages/jam_IOX/signing/xr_sign"
+        SIGNING_CMD = "%s -plat %s -file %s/boot/initrd.img  -dir %s -signature %s/boot/signature.initrd.img"% \
+            (XR_SIGN,self.platform, self.giso_dir,self.giso_dir,self.giso_dir)
+        if not os.path.exists(".ACMEROOT") :
+            os.makedirs(".ACMEROOT")
+        if not os.path.exists("tools") :
+            cmd = "tar -xvf %s"%(CER_TAR_FILE)
+            run_cmd(cmd)
+        run_cmd(SIGNING_CMD)
+        # Update MD5SUM in gisobuild after initrd
+        with open("%s/%s" % (self.giso_dir, Giso.ISO_INFO_FILE), 'r') as f:
+            iso_info_raw = f.read()
+
+        #iso_info_raw = iso_info_raw.replace(, giso_name_string)
+        cmd = "md5sum %s/boot/initrd.img"%(self.giso_dir)
+        status,md5sum_of_initrd = commands.getstatusoutput(cmd)
+        if not status :
+            md5sum_of_initrd = md5sum_of_initrd.split(" ")[0].strip()
+        else :
+            raise RuntimeError("Error CMD=%s returned --->%s" % (cmd, md5sum_of_initrd))
+
+        iso_info_raw = iso_info_raw.replace(re.search(r'Initrd: initrd.img (.*)\n',
+            iso_info_raw).group(1),md5sum_of_initrd)
+        with open("%s/%s" % (self.giso_dir, Giso.ISO_INFO_FILE), 'w') as f:
+            f.write(iso_info_raw)
+        return
+
     def __enter__(self):
         return self
 
@@ -1503,11 +1737,21 @@ def parsecli():
     parser.add_argument('-c', '--xrconfig', dest='xrConfig', type=str,
                         required=False, action='append',
                         help='Path to XR config file')
+
     parser.add_argument('-l', '--label', dest='gisoLabel', type=str,
                         required=False, action='append',
                         help='Golden ISO Label')
+
     parser.add_argument('-m', '--migration', dest='migTar', action='store_true',
                         help='To build Migration tar only for ASR9k')
+
+    if os.path.exists('/sw/packages/jam_IOX/signing/xr_sign'):
+        parser.add_argument('-o', '--optimize', dest='optimize', action='store_true',
+                    help='Optimize GISO by recreating and resigning initrd')
+    
+    parser.add_argument('-x', '--x86_only', dest='x86_only', action='store_true',
+                        help='Use only x86_64 rpms even if arm is applicable for the platform')
+
     version_string = "%%(prog)s (version %s)" %(__version__)
     parser.add_argument('-v', '--version', 
                         action='version',                    
@@ -1637,6 +1881,9 @@ def main(argv):
             rpm_db.filter_multiple_hostos_spirit_boot_rpms(
                 giso.get_bundle_iso_platform_name())
 
+            #SKEWAT
+            rpm_db.filter_superseded_rpms()
+
             # 1.3.7 Group RPMS by vm_type and card architecture 
             # {"Host":{Arch:[rpm list]},"Cal":{Arch:[rpmlist]},
             #  "Xr":{Arch:[rpmlist]}} 
@@ -1662,6 +1909,9 @@ def main(argv):
             final_rpm_files = []
             local_card_arch_files = []
             for arch in supp_arch:
+                if arch == "arm" and argv.x86_only:
+                    logger.info("\nSkipping arm rpms as given x86_only option")
+                    continue
                 arch_rpm_files = map(lambda rpm: rpm.file_name,
                                      rpm_db.get_cisco_rpms_by_vm_arch(vm_type, 
                                                                       arch) +
@@ -1688,6 +1938,9 @@ def main(argv):
             missing = False
             missing_arch_rpms = rpm_db.get_missing_arch_rpm(vm_type, supp_arch)
             for arch in missing_arch_rpms.keys():
+                if arch == "arm" and argv.x86_only:
+                    logger.debug("Skipping arm rpms in missing_arch_rpms check as given x86_only option")
+                    continue
                 map(lambda x: logger.error("\tError: Missing %s.%s.rpm" % 
                                            (x, arch)),
                     missing_arch_rpms[arch])
@@ -1738,6 +1991,9 @@ def main(argv):
             logger.info('\n\t...Golden ISO creation SUCCESS.') 
             logger.info('\nGolden ISO Image Location: %s/%s' % 
                         (cwd, giso.giso_name))
+            with open('img_built_name.txt',"w") as f:
+                f.write(giso.giso_name)
+            sys.exit(0)
         
         if giso.is_tar_require: 
             with Migtar() as migtar:
@@ -1746,6 +2002,35 @@ def main(argv):
                 logger.info('\nMigration tar creation SUCCESS.') 
                 logger.info('\nMigration tar Location: %s/%s' % 
                             (cwd, migtar.dst_system_tar))
+
+def readiso(iso_file, out_dir):
+    ISOINFO="isoinfo"
+    DIR_PREFIX="Directory listing of /"
+
+    pwd = cwd
+    cmd = ("%s -R -l -i %s "%(ISOINFO,iso_file))
+    status,output = commands.getstatusoutput(cmd)
+    if status :
+	logger.error("Command :%s failed with error :\n%s"%(cmd,output))
+	return -1
+
+    for line in output.splitlines():
+        if not line :
+	    continue
+        elif line.startswith("d"):
+	    continue
+        elif line.startswith(DIR_PREFIX):
+            dir_name = line.replace(DIR_PREFIX,'').strip()
+            if not os.path.exists(os.path.join(out_dir,dir_name)):
+                os.makedirs(os.path.join(out_dir,dir_name))
+        else:
+            file_name = line.split()[11]
+            if file_name == ".." :
+                continue
+            dir_file = os.path.join("/",dir_name,file_name)
+            out_dir_file = os.path.join(out_dir,dir_name,file_name)
+            cmd = "%s -R -i %s -x %s > %s"%(ISOINFO,iso_file,dir_file,out_dir_file)
+            run_cmd(cmd)
 
 if __name__ == "__main__":
 
@@ -1772,10 +2057,12 @@ if __name__ == "__main__":
     logger.addHandler(fh)
     logger.addHandler(ch)
     logger.debug("##############START#####################")
+
     try:
         args = parsecli()
+        system_resource_check(args)
         logger.info("Golden ISO build process starting...")
-        system_resourse_check()
+        OPTIONS = args
         main(args)
         logger.debug("Exiting normally")
         logger.info("\nDetail logs: %s" % logfile)
