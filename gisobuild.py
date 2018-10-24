@@ -1993,8 +1993,6 @@ def main(argv):
                         (cwd, giso.giso_name))
             with open('img_built_name.txt',"w") as f:
                 f.write(giso.giso_name)
-            sys.exit(0)
-        
         if giso.is_tar_require: 
             with Migtar() as migtar:
                 logger.info('\nBuilding Migration tar...')
@@ -2002,6 +2000,7 @@ def main(argv):
                 logger.info('\nMigration tar creation SUCCESS.') 
                 logger.info('\nMigration tar Location: %s/%s' % 
                             (cwd, migtar.dst_system_tar))
+        sys.exit(0)
 
 def readiso(iso_file, out_dir):
     ISOINFO="isoinfo"
