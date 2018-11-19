@@ -1629,7 +1629,13 @@ class Giso:
         #self.giso_name = '%s.%s-%s.%s' % (giso_name_string, "iso",
         #                                  iso.get_iso_version(), 
         #                                  self.giso_ver_label)
-        self.giso_name = '%s-%s-%s.%s' % (giso_name_string,
+        # iso version string will be of format 6.2.3 
+        if iso.get_iso_version()[0] == '6' and iso.get_iso_version()[2] <= '2':
+            self.giso_name = '%s.%s-%s.%s' % (giso_name_string, "iso",
+                                          iso.get_iso_version(), 
+                                          self.giso_ver_label)
+        else :
+            self.giso_name = '%s-%s-%s.%s' % (giso_name_string,
                                           iso.get_iso_version(), 
                                           self.giso_ver_label, "iso")
 
