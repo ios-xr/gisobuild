@@ -157,7 +157,8 @@ class Migtar:
         TMP_INITRD=workspace_path+"/tmp/initrd.img"
     
         logger.debug("Getting initrd(%s) from ISO" % self.BOOT_INITRD)
-        run_cmd('iso-read -i ' + input_image + " -e /" + self.BOOT_INITRD + " -o " + TMP_INITRD)
+        #run_cmd('iso-read -i ' + input_image + " -e /" + self.BOOT_INITRD + " -o " + TMP_INITRD)
+        run_cmd('isoinfo -i ' + input_image + " -R -x /" + self.BOOT_INITRD + " > " + TMP_INITRD)
 
         #check if Boot Directory exists
         if not os.path.exists(TMP_INITRD):
@@ -1403,15 +1404,24 @@ class Giso:
         plat = self.get_bundle_iso_platform_name()
         if OPTIMIZE_CAPABLE and not args.optimize:
             self.giso_rpm_path = DEFAULT_RPM_PATH
-        elif plat in Giso.NESTED_ISO_PLATFORMS :
-            # This was interim change for 651 release for fretta only
-            if "6.5.1." in self.bundle_iso.get_iso_version() or '6.5.1' == self.bundle_iso.get_iso_version():
-                print self.bundle_iso.get_iso_version()
-                self.giso_rpm_path = SIGNED_651_NCS5500_RPM_PATH
+            logger.debug("Golden ISO RPM_PATH: %s" % self.giso_rpm_path)
+        elif OPTIMIZE_CAPABLE and args.optimize:
+            if plat in Giso.NESTED_ISO_PLATFORMS :
+                # This was interim change for 651 release for fretta only
+                if "6.5.1." in self.bundle_iso.get_iso_version() or '6.5.1' == self.bundle_iso.get_iso_version():
+                    print self.bundle_iso.get_iso_version()
+                    self.giso_rpm_path = SIGNED_651_NCS5500_RPM_PATH
+                else :
+                    self.giso_rpm_path = SIGNED_NCS5500_RPM_PATH
             else :
-                self.giso_rpm_path = SIGNED_NCS5500_RPM_PATH
+                self.giso_rpm_path = SIGNED_RPM_PATH
+            logger.debug("Optimised Golden ISO RPM_PATH: %s"
+                         % self.giso_rpm_path)
         else :
-            self.giso_rpm_path = SIGNED_RPM_PATH
+            # Build Server is not capable of otimize the Golden ISO
+            self.giso_rpm_path = DEFAULT_RPM_PATH
+            logger.debug("Golden ISO RPM_PATH: %s" % self.giso_rpm_path)
+
 
         if plat in Giso.NESTED_ISO_PLATFORMS:
             logger.debug("Skipping the top level iso wrapper")
@@ -1836,82 +1846,82 @@ class Giso:
         duplicate_calv_rpms = []
         duplicate_host_rpms = []
         with open('rpms_packaged_in_giso.txt',"w") as fdr:
-			for vm_type in Giso.VM_TYPE:
-				rpm_files = self.vm_rpm_file_paths[vm_type]
-				if rpm_files is not None:
-					giso_repo_path = "%s/%s_rpms" % (self.giso_dir, 
-													 str(vm_type).lower())
-					os.mkdir(giso_repo_path)
-					if vm_type == CALVADOS_SUBSTRING:
-						vm_type = SYSADMIN_SUBSTRING
-					logger.info("\n%s rpms:" % vm_type)
+            for vm_type in Giso.VM_TYPE:
+                rpm_files = self.vm_rpm_file_paths[vm_type]
+                if rpm_files is not None:
+                    giso_repo_path = "%s/%s_rpms" % (self.giso_dir, 
+                                                     str(vm_type).lower())
+                    os.mkdir(giso_repo_path)
+                    if vm_type == CALVADOS_SUBSTRING:
+                        vm_type = SYSADMIN_SUBSTRING
+                    logger.info("\n%s rpms:" % vm_type)
 
-					for rpm_file in rpm_files:
-						rpm_file_basename = os.path.basename(rpm_file)
-						if vm_type == HOST_SUBSTRING: 
-							if (plat in rpm_file_basename) and (HOSTOS_SUBSTRING in rpm_file_basename): 
-								host_base_rpm = self.get_base_rpm(plat, vm_type, rpm_file_basename, self.giso_dir, giso_repo_path)
-								logger.debug("\nbase rpm of %s: %s" % (rpm_file, host_base_rpm))
+                    for rpm_file in rpm_files:
+                        rpm_file_basename = os.path.basename(rpm_file)
+                        if vm_type == HOST_SUBSTRING: 
+                            if (plat in rpm_file_basename) and (HOSTOS_SUBSTRING in rpm_file_basename): 
+                                host_base_rpm = self.get_base_rpm(plat, vm_type, rpm_file_basename, self.giso_dir, giso_repo_path)
+                                logger.debug("\nbase rpm of %s: %s" % (rpm_file, host_base_rpm))
 
-							duplicate_present = False
-							if rpm_db.vm_sp_rpm_file_paths[HOST_SUBSTRING] is not None:
-								for sp_rpm_file in rpm_db.vm_sp_rpm_file_paths[HOST_SUBSTRING]:
-									if rpm_file in sp_rpm_file:
-										duplicate_host_rpms.append(rpm_file)
-										duplicate_present = True
-										break
-								if duplicate_present:
-									continue
+                            duplicate_present = False
+                            if rpm_db.vm_sp_rpm_file_paths[HOST_SUBSTRING] is not None:
+                                for sp_rpm_file in rpm_db.vm_sp_rpm_file_paths[HOST_SUBSTRING]:
+                                    if rpm_file in sp_rpm_file:
+                                        duplicate_host_rpms.append(rpm_file)
+                                        duplicate_present = True
+                                        break
+                                if duplicate_present:
+                                    continue
 
-						if vm_type == SYSADMIN_SUBSTRING: 
-							if (plat in rpm_file_basename) and (HOSTOS_SUBSTRING in rpm_file_basename): 
-								sysadmin_base_rpm = self.get_base_rpm(plat, vm_type, rpm_file_basename, self.giso_dir, giso_repo_path)
-								logger.debug("\nbase rpm of %s: %s" % (rpm_file, sysadmin_base_rpm))
+                        if vm_type == SYSADMIN_SUBSTRING: 
+                            if (plat in rpm_file_basename) and (HOSTOS_SUBSTRING in rpm_file_basename): 
+                                sysadmin_base_rpm = self.get_base_rpm(plat, vm_type, rpm_file_basename, self.giso_dir, giso_repo_path)
+                                logger.debug("\nbase rpm of %s: %s" % (rpm_file, sysadmin_base_rpm))
 
-							duplicate_present = False
-							if rpm_db.vm_sp_rpm_file_paths[CALVADOS_SUBSTRING] is not None:
-								for sp_rpm_file in rpm_db.vm_sp_rpm_file_paths[CALVADOS_SUBSTRING]:
-									if rpm_file in sp_rpm_file:
-										duplicate_calv_rpms.append(rpm_file)
-										duplicate_present = True
-										break
-								if duplicate_present:
-									continue
+                            duplicate_present = False
+                            if rpm_db.vm_sp_rpm_file_paths[CALVADOS_SUBSTRING] is not None:
+                                for sp_rpm_file in rpm_db.vm_sp_rpm_file_paths[CALVADOS_SUBSTRING]:
+                                    if rpm_file in sp_rpm_file:
+                                        duplicate_calv_rpms.append(rpm_file)
+                                        duplicate_present = True
+                                        break
+                                if duplicate_present:
+                                    continue
 
-						if vm_type == XR_SUBSTRING: 
-							'''
-							if (plat in rpm_file_basename) and (SPIRIT_BOOT_SUBSTRING in rpm_file_basename): 
-								xr_base_rpm = self.get_base_rpm(plat, vm_type, rpm_file_basename, self.giso_dir, giso_repo_path)
-								logger.debug("\nbase rpm of %s: %s" % (rpm_file, xr_base_rpm))
-							'''
+                        if vm_type == XR_SUBSTRING: 
+                            '''
+                            if (plat in rpm_file_basename) and (SPIRIT_BOOT_SUBSTRING in rpm_file_basename): 
+                                xr_base_rpm = self.get_base_rpm(plat, vm_type, rpm_file_basename, self.giso_dir, giso_repo_path)
+                                logger.debug("\nbase rpm of %s: %s" % (rpm_file, xr_base_rpm))
+                            '''
 
-							duplicate_present = False
-							if rpm_db.vm_sp_rpm_file_paths[XR_SUBSTRING] is not None:
-								for sp_rpm_file in rpm_db.vm_sp_rpm_file_paths[XR_SUBSTRING]:
-									if rpm_file in sp_rpm_file:
-										duplicate_xr_rpms.append(rpm_file)
-										duplicate_present = True
-										break
-								if duplicate_present:
-									continue
-						rpm_count += 1
-						shutil.copy('%s/%s' % (self.repo_path, rpm_file),
-									giso_repo_path)
-						logger.info('\t%s' % (os.path.basename(rpm_file)))
-						fdr.write("%s\n"%os.path.basename(rpm_file))
-						rpms = True
-						if "-k9sec-" in rpm_file:
-							self.k9sec_present = True
-				# TODO: Print duplicate
-				if vm_type == HOST_SUBSTRING and duplicate_host_rpms:
-					logger.debug("\nSkipped following duplicate host rpms from repo\n")
-					map(lambda file_name: logger.debug("\t(-) %s" % file_name), duplicate_host_rpms)
-				if vm_type == SYSADMIN_SUBSTRING and duplicate_calv_rpms:
-					logger.debug("\nSkipped following duplicate calvados rpm from repo\n")
-					map(lambda file_name: logger.debug("\t(-) %s" % file_name), duplicate_calv_rpms)
-				if vm_type == XR_SUBSTRING and duplicate_xr_rpms:
-					logger.debug("\nSkipped following duplicate xr rpm from repo\n")
-					map(lambda file_name: logger.debug("\t(-) %s" % file_name), duplicate_xr_rpms)
+                            duplicate_present = False
+                            if rpm_db.vm_sp_rpm_file_paths[XR_SUBSTRING] is not None:
+                                for sp_rpm_file in rpm_db.vm_sp_rpm_file_paths[XR_SUBSTRING]:
+                                    if rpm_file in sp_rpm_file:
+                                        duplicate_xr_rpms.append(rpm_file)
+                                        duplicate_present = True
+                                        break
+                                if duplicate_present:
+                                    continue
+                        rpm_count += 1
+                        shutil.copy('%s/%s' % (self.repo_path, rpm_file),
+                                    giso_repo_path)
+                        logger.info('\t%s' % (os.path.basename(rpm_file)))
+                        fdr.write("%s\n"%os.path.basename(rpm_file))
+                        rpms = True
+                        if "-k9sec-" in rpm_file:
+                            self.k9sec_present = True
+                # TODO: Print duplicate
+                if vm_type == HOST_SUBSTRING and duplicate_host_rpms:
+                    logger.debug("\nSkipped following duplicate host rpms from repo\n")
+                    map(lambda file_name: logger.debug("\t(-) %s" % file_name), duplicate_host_rpms)
+                if vm_type == SYSADMIN_SUBSTRING and duplicate_calv_rpms:
+                    logger.debug("\nSkipped following duplicate calvados rpm from repo\n")
+                    map(lambda file_name: logger.debug("\t(-) %s" % file_name), duplicate_calv_rpms)
+                if vm_type == XR_SUBSTRING and duplicate_xr_rpms:
+                    logger.debug("\nSkipped following duplicate xr rpm from repo\n")
+                    map(lambda file_name: logger.debug("\t(-) %s" % file_name), duplicate_xr_rpms)
 
         if self.sp_info_path is not None:
             for vm_type in Giso.VM_TYPE:
