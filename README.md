@@ -47,7 +47,7 @@ Requirement on Linux machine for creating golden ISO is following utilities :
 Python 2.6 or higher version
 chroot,
 mount
-mkiso
+mkisofs
 zcat
 Atleast 6 GB of free disk space , 1 GB RAM is needed on linux machine where ISO is being created
 RPM version 5.x is required to be installed
