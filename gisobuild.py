@@ -4,7 +4,7 @@
 #
 # utility to build golden iso
 #
-# Copyright (c) 2015-2018 by Cisco Systems, Inc.
+# Copyright (c) 2015-2019 by Cisco Systems, Inc.
 # All rights reserved.
 # =============================================================================
 from datetime import datetime
@@ -26,7 +26,7 @@ import commands
 import stat
 import pprint
 
-__version__ = '0.11'
+__version__ = '0.12'
 GISO_PKG_FMT_VER = 1.0
 
 try:
@@ -57,6 +57,7 @@ SIGNED_RPM_PATH =  'giso/boot/initrd.img/<rpms>'
 SIGNED_NCS5500_RPM_PATH =  'giso/boot/initrd.img/iso/system_image.iso/boot/initrd.img/<rpms>'
 SIGNED_651_NCS5500_RPM_PATH = 'giso/boot/initrd.img/iso/system_image.iso/<rpms>'
 OPTIMIZE_CAPABLE = os.path.exists('/sw/packages/jam_IOX/signing/xr_sign')
+AUTO_RPM_BINARY_PATH = "/auto/thirdparty-sdk/host-x86_64/lib/rpm-5.1.9/rpm"
 
 def run_cmd(cmd):
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, 
@@ -246,15 +247,27 @@ class Rpm:
         self.xrrelease = None
         self.file_name = None
 
-    def populate_mdata(self, fs_root, rpm):
+    def populate_mdata(self, fs_root, rpm, is_full_iso):
         self.file_name = rpm
         # Some RPMs(k9) dont have read access which causes RPM query fail 
         run_cmd(" chmod 644 %s"%(os.path.join(fs_root,rpm)))
-        result = run_cmd("chroot "+fs_root+" rpm -qp --qf '%{NAME};%{VERSION};"
+        if not is_full_iso:
+            result = run_cmd("chroot "+fs_root+" rpm -qp --qf '%{NAME};%{VERSION};"
                          "%{RELEASE};%{ARCH};%{PACKAGETYPE};%{PACKAGEPRESENCE};"
                          "%{PIPD};%{CISCOHW};%{CARDTYPE};%{BUILDTIME};"
                          "%{GROUP};%{VMTYPE};%{SUPPCARDS};%{PREFIXES};"
                          "%{XRRELEASE};' "+rpm)
+        else:
+            if os.path.exists(AUTO_RPM_BINARY_PATH):
+                result = run_cmd(AUTO_RPM_BINARY_PATH+
+                         " -qp --qf '%{NAME};%{VERSION};"
+                         "%{RELEASE};%{ARCH};%{PACKAGETYPE};%{PACKAGEPRESENCE};"
+                         "%{PIPD};%{CISCOHW};%{CARDTYPE};%{BUILDTIME};"
+                         "%{GROUP};%{VMTYPE};%{SUPPCARDS};%{PREFIXES};"
+                         "%{XRRELEASE};' "+fs_root+ "/"+rpm)
+            else:
+                logger.error("Error: %s is not accessible for collecting rpm metadata\n" %(AUTO_RPM_BINARY_PATH))
+                sys.exit(-1)
 
         result_str_list = result["output"].split(";")
         self.name = result_str_list[0]
@@ -273,10 +286,18 @@ class Rpm:
         self.prefixes = result_str_list[13]
         self.xrrelease = result_str_list[14]
 
-        result = run_cmd("chroot %s rpm -qp --provides %s" % (fs_root, rpm))
+        if not is_full_iso:
+            result = run_cmd("chroot %s rpm -qp --provides %s" % (fs_root, rpm))
+        else:
+            if os.path.exists(AUTO_RPM_BINARY_PATH):
+                result = run_cmd("%s -qp --provides %s" % (AUTO_RPM_BINARY_PATH, fs_root+"/"+rpm))
         self.provides = result["output"]
 
-        result = run_cmd("chroot %s rpm -qp --requires %s" % (fs_root, rpm))
+        if not is_full_iso:
+            result = run_cmd("chroot %s rpm -qp --requires %s" % (fs_root, rpm))
+        else:
+            if os.path.exists(AUTO_RPM_BINARY_PATH):
+                result = run_cmd("%s -qp --requires %s" % (AUTO_RPM_BINARY_PATH, fs_root+"/"+rpm))
         #
         # There can be more than one requires.
         # Ignore requires starting with /
@@ -352,8 +373,9 @@ class Rpmdb:
         self.sp_name_invalid = []
         self.sp_mount_path = None
         self.vm_sp_rpm_file_paths = {"XR": None, "CALVADOS": None, "HOST": None}
+        self.is_full_iso_require = False
 
-    def populate_rpmdb(self, fs_root, repo, platform, iso_version):
+    def populate_rpmdb(self, fs_root, repo, platform, iso_version, full_iso):
         retval = 0
         if not (repo and fs_root):
             logger.error('Invalid arguments')
@@ -364,6 +386,8 @@ class Rpmdb:
             logger.info('RPM repository directory \'%s\' is empty!!' % repo)
             return 0 
         rpm_name_version_release_arch_list = []
+        if full_iso:
+            self.is_full_iso_require = True
         logger.info("Building RPM Database...")
         # creating temporary path to hold user provided rpms and sp's rpms
         pwd=cwd
@@ -374,7 +398,8 @@ class Rpmdb:
                 shutil.copy(file_name, fs_root)
                 shutil.copy(file_name, self.tmp_repo_path)
                 rpm = Rpm()
-                rpm.populate_mdata(fs_root, os.path.basename(file_name))
+                rpm.populate_mdata(fs_root, os.path.basename(file_name), 
+                                   self.is_full_iso_require)
                 rpm_name_ver_rel_arch = "%s-%s-%s.%s" % (rpm.name, rpm.version,
                                                          rpm.release, rpm.arch)
                 if rpm_name_ver_rel_arch \
@@ -1192,6 +1217,9 @@ def system_resource_check(args):
         logger.error("Error: %s GB free disk space available in %s" % 
                      (str(total_avail_space_gb), cwd))
         sys.exit(-1)
+    
+    if args.fullISO:
+        tools.remove('chroot')
     for tool in tools:
         try:
             run_cmd("which %s" % tool)
@@ -1373,7 +1401,7 @@ class Giso:
     GOLDEN_K9_STRING = "goldenk9"
     GISO_INFO_TXT = "giso_info.txt"
     NESTED_ISO_PLATFORMS = ["ncs5500", "ncs560", "ncs540"]
-
+    GISO_SCRIPT = "autorun"
     def __init__(self):
         self.repo_path = None
         self.bundle_iso = None
@@ -1393,6 +1421,8 @@ class Giso:
         self.platform = None
         self.giso_rpm_path = DEFAULT_RPM_PATH
         self.giso_name_string = None
+        self.script = None
+        self.is_full_iso_require = False
         
     #
     # Giso object Setter Api's
@@ -1450,6 +1480,9 @@ class Giso:
 
     def set_sp_info_file_path(self, sp_info_path):
         self.sp_info_path = sp_info_path
+
+    def set_script(self, script):
+        self.script = script
 
     @staticmethod
     def is_platform_supported(platform):
@@ -1561,6 +1594,26 @@ class Giso:
         else:
             return vm_type_iso_file
 
+    def is_new_format_giso_name_supported(self, version):
+
+        retval = False 
+        version_tupple = version.split('.')
+
+        if int(version_tupple[0]) > 6:
+            retval = True
+        elif int(version_tupple[0]) == 6 and int(version_tupple[1]) > 5 :
+            retval = True
+        elif len(version_tupple) == 3 and int(version_tupple[0]) == 6 and \
+             int(version_tupple[1]) == 5 and int(version_tupple[2]) == 2:
+            retval = True
+        elif len(version_tupple) >= 3 and int(version_tupple[0]) == 6 and \
+             int(version_tupple[1]) == 5 and int(version_tupple[2]) > 2:
+            retval = True
+        elif len(version_tupple) == 3 and int(version_tupple[0]) == 6 and \
+             int(version_tupple[1]) == 3 and int(version_tupple[2]) == 3:
+            retval = True
+        return retval
+
     def prepare_giso_info_txt(self, iso, sp_name):
         iso_name = iso.get_iso_name()
 
@@ -1621,10 +1674,21 @@ class Giso:
                         vm_type_meta = SYSADMIN_SUBSTRING.lower()
                     tmp_dict['%s rpms in golden ISO'%(vm_type_meta)] = ' '.join(rpm_files)
                     rpms_list.append(tmp_dict)
+            # if sp is present its added to yaml file to be displayed as part of
+            # show install package <giso>
             if sp_name is not None:
                 tmp_dict = {}
                 tmp_dict['sp in golden ISO'] = os.path.basename(sp_name)
                 rpms_list.append(tmp_dict) 
+            # if XR Config file present then add the name
+            if self.xrconfig is not None:
+                f.write("\n\nXR-Config file:\n")
+                f.write("%s" % Giso.XR_CONFIG_FILE_NAME)
+             
+            # if autorun script present then add the name
+            if self.script is not None:
+                f.write("\n\nUser script:\n")
+                f.write("%s" % Giso.GISO_SCRIPT)
 
         iso_mdata = mdata['iso_mdata']
         iso_mdata['name'] = "%s-%s"%(giso_name_string, iso.get_iso_version())
@@ -1636,18 +1700,17 @@ class Giso:
         fd.write(yaml.dump(mdata, default_flow_style=False))
         fd.close()
 
-        #self.giso_name = '%s.%s-%s.%s' % (giso_name_string, "iso",
-        #                                  iso.get_iso_version(), 
-        #                                  self.giso_ver_label)
-        # iso version string will be of format 6.2.3 
-        if iso.get_iso_version()[0] == '6' and iso.get_iso_version()[2] <= '2':
-            self.giso_name = '%s.%s-%s.%s' % (giso_name_string, "iso",
-                                          iso.get_iso_version(), 
-                                          self.giso_ver_label)
-        else :
+ 
+        #New format GISO Name:(<platform>-<golden(k9)>-x-<version>-<label>.iso)
+        if self.is_new_format_giso_name_supported(iso.get_iso_version()):
             self.giso_name = '%s-%s-%s.%s' % (giso_name_string,
                                           iso.get_iso_version(), 
                                           self.giso_ver_label, "iso")
+        #Old format GISO Name:(<platform-name>-goldenk9-x.iso-<version>.<label>)
+        else : 
+            self.giso_name = '%s.%s-%s.%s' % (giso_name_string, "iso",
+                                          iso.get_iso_version(), 
+                                          self.giso_ver_label)
 
     def update_grub_cfg(self, iso):
         # update grub.cfg file with giso_boot parameter 
@@ -1974,11 +2037,19 @@ class Giso:
                                                       os.path.basename(self.sp_info_path)))
             service_pack = True
 
+        if self.script:
+            logger.info("\nUser script:")
+            logger.info('\t%s' % Giso.GISO_SCRIPT)
+            shutil.copy(self.script, "%s/%s" % (self.giso_dir, 
+                                                  Giso.GISO_SCRIPT))
+            cmd = "chmod +x %s/%s"%(self.giso_dir, Giso.GISO_SCRIPT)
+            script = True
+ 
         rpm_db.cleanup_tmp_sp_data()
 
-        if not (rpms or service_pack or config):
+        if not (rpms or service_pack or config or script):
             logger.info("Final rpm list or service pack is Zero and "
-                        "there is no XR config specified")
+                        "there is no XR config/user script specified")
             logger.info("Nothing to do")
             return -1
         else:
@@ -2025,8 +2096,10 @@ class Giso:
             readiso(self.system_image, self.system_image_extract_path)
             os.chdir(self.system_image_extract_path)
 
-            # Move the RPMS to system_image.iso content
-            run_cmd("mv  -f %s/*_rpms %s " % (self.giso_dir, self.system_image_extract_path))
+            rpms_path = glob.glob('%s/*_rpms' % self.giso_dir)
+            if len(rpms_path):
+                # Move the RPMS to system_image.iso content
+                run_cmd("mv  -f %s/*_rpms %s " % (self.giso_dir, self.system_image_extract_path))
 
             # Move giso metadata to system_image.iso content
             run_cmd("cp  -f %s/giso_* %s " % (self.giso_dir, self.system_image_extract_path))
@@ -2034,6 +2107,8 @@ class Giso:
                run_cmd("cp  -f %s/sp_* %s " % (self.giso_dir, self.system_image_extract_path))
             if os.path.isfile(self.giso_dir+"/"+Giso.XR_CONFIG_FILE_NAME):
                run_cmd("cp  -f %s/%s %s " % (self.giso_dir, Giso.XR_CONFIG_FILE_NAME, self.system_image_extract_path))
+            if os.path.isfile(self.giso_dir+"/"+Giso.GISO_SCRIPT):
+               run_cmd("cp  -f %s/%s %s " % (self.giso_dir, Giso.GISO_SCRIPT, self.system_image_extract_path))
             run_cmd("cp  -f %s/*.yml %s " % (self.giso_dir, self.system_image_extract_path))
 
             # update iso_info.txt file with giso name
@@ -2065,6 +2140,8 @@ class Giso:
         run_cmd("cp -fr %s/* %s " % (extracted_bundle_path, new_initrd_path))
         #over write with new system_image
         run_cmd("cp %s %s/iso/"%(self.system_image,new_initrd_path))
+        # Following workaround to work install replace commit operation 
+        run_cmd("cp -f %s/*.yml %s " % (self.giso_dir, new_initrd_path))
         os.chdir(new_initrd_path)
         cmd = "find . | cpio -o -H newc | gzip > %s/boot/initrd.img"%(self.giso_dir)
         run_cmd(cmd)
@@ -2086,8 +2163,10 @@ class Giso:
         os.chdir(extract_initrd_r71x)
         run_cmd("zcat -f %s | cpio -id" %(system_image_initrd)) 
         os.chdir(pwd)
-        # Move the RPMS to initrd content
-        run_cmd("mv  -f %s/*_rpms %s " % (extract_system_image_initrd_path, extract_initrd_r71x))
+        rpms_path = glob.glob('%s/*_rpms' % extract_system_image_initrd_path)
+        if len(rpms_path):
+            # Move the RPMS to initrd content
+            run_cmd("mv  -f %s/*_rpms %s " % (extract_system_image_initrd_path, extract_initrd_r71x))
         # Move giso metadata to initrd content
         run_cmd("cp  -f %s/giso_* %s " % (extract_system_image_initrd_path, extract_initrd_r71x))
         if os.path.isfile(extract_system_image_initrd_path+"/sp_info.txt"):
@@ -2095,6 +2174,10 @@ class Giso:
         if os.path.isfile(extract_system_image_initrd_path+"/"+Giso.XR_CONFIG_FILE_NAME):
            run_cmd("cp  -f %s/%s %s " % (extract_system_image_initrd_path,
                                   Giso.XR_CONFIG_FILE_NAME, extract_initrd_r71x))
+        if os.path.isfile(extract_system_image_initrd_path+"/"+Giso.GISO_SCRIPT):
+           run_cmd("cp  -f %s/%s %s " % (extract_system_image_initrd_path,
+                                  Giso.GISO_SCRIPT, extract_initrd_r71x))
+
 
         run_cmd("cp  -f %s/*.yml %s " % (extract_system_image_initrd_path, extract_initrd_r71x))
         os.chdir(extract_initrd_r71x)
@@ -2110,6 +2193,8 @@ class Giso:
         run_cmd("mv new_system_image.iso %s"%(self.system_image))
         # replace system_image.iso
         run_cmd("cp %s %s/iso/"%(self.system_image,new_initrd_path))
+        # Following workaround to work install replace commit operation 
+        run_cmd("cp  -f %s/*.yml %s " % (self.giso_dir, new_initrd_path))
         os.chdir(new_initrd_path)
         cmd = "find . | cpio -o -H newc | gzip > %s/boot/initrd.img"%(self.giso_dir)
         run_cmd(cmd)
@@ -2127,8 +2212,10 @@ class Giso:
         run_cmd("cp -fr %s/* %s " % (extracted_bundle_path, new_initrd_path))
         run_cmd("rm -f %s/*.rpm  " % (new_initrd_path))
         #copy GISO related stuff
-        # Move the RPMS to system_image.iso content
-        run_cmd("mv  -f %s/*_rpms %s " % (self.giso_dir, new_initrd_path))
+        rpms_path = glob.glob('%s/*_rpms' % self.giso_dir)
+        if len(rpms_path):
+            # Move the RPMS to system_image.iso content
+            run_cmd("mv  -f %s/*_rpms %s " % (self.giso_dir, new_initrd_path))
 
         # Move giso metadata to system_image.iso content
         run_cmd("cp  -f %s/giso_* %s " % (self.giso_dir, new_initrd_path))
@@ -2137,6 +2224,10 @@ class Giso:
         if os.path.isfile(self.giso_dir+"/"+Giso.XR_CONFIG_FILE_NAME):
            run_cmd("cp  -f %s/%s %s " % (self.giso_dir, \
                                   Giso.XR_CONFIG_FILE_NAME, new_initrd_path))
+        if os.path.isfile(self.giso_dir+"/"+Giso.GISO_SCRIPT):
+           run_cmd("cp  -f %s/%s %s " % (self.giso_dir, \
+                                  Giso.GISO_SCRIPT, new_initrd_path))
+
 
         run_cmd("cp  -f %s/*.yml %s " % (self.giso_dir, new_initrd_path))
 
@@ -2212,9 +2303,15 @@ def parsecli():
     parser.add_argument('-c', '--xrconfig', dest='xrConfig', type=str,
                         required=False, action='append',
                         help='Path to XR config file')
+
+    parser.add_argument('-s', '--script', dest='script', type=str,
+                        required=False, action='append',
+                        help='Path to user executable script')
+ 
     parser.add_argument('-l', '--label', dest='gisoLabel', type=str,
                         required=False, action='append',
                         help='Golden ISO Label')
+
     parser.add_argument('-m', '--migration', dest='migTar', action='store_true',
                         help='To build Migration tar only for ASR9k')
     if OPTIMIZE_CAPABLE: 
@@ -2223,6 +2320,13 @@ def parsecli():
     parser.add_argument('-x', '--x86_only', dest='x86_only', action='store_true',
                         help='Use only x86_64 rpms even if arm is applicable for the platform')
     version_string = "%%(prog)s (version %s)" %(__version__)
+
+    parser.add_argument('-f', '--fullISO', dest='fullISO', action='store_true',
+                        help='To build full iso only for xrv9k')
+
+    parser.add_argument('-g', '--gisoInfo', dest='gisoInfo', action='store_true',
+                        help='To display Golden ISO Information')
+
     parser.add_argument('-v', '--version', 
                         action='version',                    
                         help='Print version of this script and exit',
@@ -2242,42 +2346,53 @@ def parsecli():
         if result["output"].find("ISO") == -1:
             logger.error("Error: File %s is not ISO file." % pargs.bundle_iso[0])
             sys.exit(-1)
-    if not pargs.xrConfig:
+    if not pargs.gisoInfo and not pargs.xrConfig:
         logger.debug('Info: XR Congifuration file not specified.')
         logger.debug('Info: Golden ISO will not have XR configuration file')
-    elif len(pargs.xrConfig) > 1:
+    elif not pargs.gisoInfo and len(pargs.xrConfig) > 1:
         logger.error('Error: Multiple xr config files are given.')
         logger.error('Info : Please provide unique xr config file.')
         sys.exit(-1)
-    elif not os.path.isfile(pargs.xrConfig[0]):
+    elif not pargs.gisoInfo and not os.path.isfile(pargs.xrConfig[0]):
         logger.error('Error: XR Configuration File %s not found.' % 
                      pargs.xrConfig[0])
         sys.exit(-1)
-    if not pargs.rpmRepo:
+    if not pargs.gisoInfo and not pargs.script:
+        logger.debug('Info: User script is not specified.')
+    elif not pargs.gisoInfo and len(pargs.script) > 1:
+        logger.error('Error: Multiple xr user scripts are given.')
+        logger.error('Info : Please provide unique script file.')
+        sys.exit(-1)
+    elif not pargs.gisoInfo and not os.path.isfile(pargs.script[0]):
+        logger.error('Error: User script %s not found.' % 
+                     pargs.script[0])
+        sys.exit(-1)
+ 
+    if not pargs.gisoInfo and not pargs.rpmRepo:
         logger.info('Info: RPM repository path not specified.')
         logger.info('Info: No additional rpms will be included.')
-    elif len(pargs.rpmRepo) > 1:
+    elif not pargs.gisoInfo and len(pargs.rpmRepo) > 1:
         logger.error('Error: Multiple rpm repo paths are given.')
         logger.error('Info : Please provide unique rpm repo path.')
         sys.exit(-1)
-    elif not os.path.isdir(pargs.rpmRepo[0]):
+    elif not pargs.gisoInfo and not os.path.isdir(pargs.rpmRepo[0]):
         logger.error('Error: RPM respotiry path %s not found' % pargs.rpmRepo[0])
         sys.exit(-1)
-    if (not pargs.xrConfig) and (not pargs.rpmRepo):
+    if not pargs.gisoInfo and not pargs.xrConfig and not pargs.script and not pargs.rpmRepo:
         logger.error('Info: Nothing to be done.')
-        logger.error('Info: RPM repository path and/or XR configuration file')
+        logger.error('Info: RPM repository path and/or XR configuration file or User Scripts')
         logger.error('      should be provided to build Golden ISO\n')
         os.system(os.path.realpath(__file__))
         sys.exit(-1)
-    if not pargs.gisoLabel:
+    if not pargs.gisoInfo and not pargs.gisoLabel:
         pargs.gisoLabel = 0
         logger.info('Info: Golden ISO label is not specified '
                     'so defaulting to 0')
-    elif len(pargs.gisoLabel) > 1:
+    elif not pargs.gisoInfo and len(pargs.gisoLabel) > 1:
         logger.error('Error: Multiple Golden ISO labels are given.')
         logger.error('Info : Please provide unique Golden ISO label.')
         sys.exit(-1)
-    else:
+    elif not pargs.gisoInfo and pargs.gisoLabel:
         temp_label = pargs.gisoLabel[0]
         new_label = string.replace(temp_label, '_', '')
         if not new_label.isalnum():
@@ -2287,6 +2402,15 @@ def parsecli():
 
     return pargs
 
+def print_giso_info(iso_file):
+    ISOINFO="isoinfo"
+    cmd = ("%s -i %s -R -x /giso_info.txt"%(ISOINFO,iso_file))
+    status,output = commands.getstatusoutput(cmd)
+    if status :
+        logger.error("Command :%s failed with error :\n%s"%(cmd,output))
+        return -1
+    else :
+        logger.info("\n%s\n" %(output))
 
 def main(argv):
     with Giso() as giso:
@@ -2321,7 +2445,16 @@ def main(argv):
         if argv.migTar:
             logger.info("\nInfo: Migration option is provided so migration tar will be generated")
             giso.is_tar_require = True
+
+
+        if argv.fullISO and giso.get_bundle_iso_platform_name().upper() != "XRV9K": 
+            logger.error("Error: fullISO option is only applicable for XRV9k platform")
+            sys.exit(-1)
                 
+        if argv.fullISO:
+            logger.info("\nInfo: fullISO option is provided so fullISO will be generated")
+            giso.is_full_iso_require = True
+
         #
         # 1.2 Scan for XR-Config file. 
         #
@@ -2336,7 +2469,9 @@ def main(argv):
 
             # 1.3.1 Scan repository and build RPM data base.
             rpm_db.populate_rpmdb(fs_root, os.path.abspath(argv.rpmRepo[0]),
-                 giso.get_bundle_iso_platform_name(), giso.get_bundle_iso_version())
+                 giso.get_bundle_iso_platform_name(), 
+                 giso.get_bundle_iso_version(),
+                 giso.is_full_iso_require)
 
             # 1.3.2 Seperate Cisco and TP rpms in RPM data base
             rpm_db.populate_tp_cisco_list(giso.get_bundle_iso_platform_name())
@@ -2371,7 +2506,7 @@ def main(argv):
         if rpm_db.get_cisco_rpm_count() == 0 and rpm_db.sp_info == None:
             logger.info("Warning: No RPMS or Optional Matching %s packages "
                         "found in repository" % (giso.get_bundle_iso_version()))
-            if not argv.xrConfig and rpm_db.get_tp_rpm_count() == 0:
+            if not argv.xrConfig and not argv.script and rpm_db.get_tp_rpm_count() == 0:
                 logger.info("Info: No Valid rpms nor XR config file found. "
                             "Nothing to do")
                 return
@@ -2428,12 +2563,13 @@ def main(argv):
             #
             # 1.5.2   Perform Compatibilty check
             #
-            if local_card_arch_files:
-                result, dup_rpm_files = \
-                    giso.do_compat_check(local_card_arch_files, vm_type)
-                if result is False:
-                    logger.error("\n\t...RPM compatibility check [FAIL]")
-                    return
+            if not giso.is_full_iso_require: 
+                if local_card_arch_files:
+                    result, dup_rpm_files = \
+                        giso.do_compat_check(local_card_arch_files, vm_type)
+                    if result is False:
+                        logger.error("\n\t...RPM compatibility check [FAIL]")
+                        return
             #
             # 1.5.3 Remove rpms's from input list 
             #       that are already part of base iso
@@ -2452,7 +2588,10 @@ def main(argv):
                     logger.debug("\nFollowing updated %s rpm(s) will be used for building Golden ISO:\n" % vm_type)
                     map(lambda x: logger.debug('\t(+) %s' % x), final_rpm_files)
                 giso.set_vm_rpm_file_paths(final_rpm_files, vm_type)
-                logger.info("\n\t...RPM compatibility check [PASS]")
+                if not giso.is_full_iso_require: 
+                    logger.info("\n\t...RPM compatibility check [PASS]")
+                else:
+                    logger.info("\n\t...RPM compatibility check [SKIPPED]")
 
         if argv.gisoLabel: 
             giso.set_giso_ver_label(argv.gisoLabel[0])
@@ -2462,7 +2601,14 @@ def main(argv):
 #       2.0 Build Golden Iso
 #
         if rpm_db.sp_info:
-           giso.set_sp_info_file_path(rpm_db.get_sp_info()) 
+           giso.set_sp_info_file_path(rpm_db.get_sp_info())
+        
+        if argv.script and os.path.exists(argv.script[0]) is True:
+            logger.info("\nUser Script (%s) will be encapsulated in Golden ISO." % 
+                        (os.path.abspath(argv.script[0])))
+            giso.set_script(argv.script[0])
+
+
         logger.info('\nBuilding Golden ISO...')
         result = giso.build_giso(rpm_db, argv.bundle_iso[0])
         rpm_db.cleanup_tmp_repo_path()
@@ -2537,6 +2683,9 @@ if __name__ == "__main__":
     logger.debug("##############START#####################")
     try:
         args = parsecli()
+        if args.gisoInfo:
+            print_giso_info(args.bundle_iso[0])
+            sys.exit(0)
         system_resource_check(args)
         logger.info("Golden ISO build process starting...")
         OPTIONS = args
