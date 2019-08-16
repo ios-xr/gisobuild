@@ -165,7 +165,7 @@ class Migtar:
         if not os.path.exists(TMP_INITRD):
             logger.error("Failed to extract initrd(%s) from ISO" 
                          % (self.BOOT_INITRD, input_image))
-            logger.Info("Please make sure at least 1.5 GB of space is availble in /tmp/")
+            logger.info("Please make sure at least 1.5 GB of space is availble in /tmp/")
             sys.exit(-1)
 
         logger.debug("Getting BOOT_DIR(%s) " % self.BOOT_DIR)
