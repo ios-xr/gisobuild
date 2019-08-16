@@ -2251,7 +2251,10 @@ class Giso:
         if not os.path.exists("tools") :
             cmd = "tar -xvf %s"%(CER_TAR_FILE)
             run_cmd(cmd)
-        run_cmd(SIGNING_CMD)
+        logger.info("\nenviron before signing is {}".format(os.environ))              
+        result = run_cmd(SIGNING_CMD)                                                
+        logger.info("\nOutput of {} is \n {}".format(SIGNING_CMD, result["output"]))        
+
         # Update MD5SUM in gisobuild after initrd
         with open("%s/%s" % (path, Giso.ISO_INFO_FILE), 'r') as f:
             iso_info_raw = f.read()
@@ -2683,6 +2686,7 @@ if __name__ == "__main__":
     logger.debug("##############START#####################")
     try:
         args = parsecli()
+        logger.debug("Argument passed to %s : %s" %(sys.argv[0], args))
         if args.gisoInfo:
             print_giso_info(args.bundle_iso[0])
             sys.exit(0)
