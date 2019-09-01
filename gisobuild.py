@@ -1248,6 +1248,7 @@ class Iso(object):
     RPM_TEST_LOG = "/tmp/rpmtest.log"
     RPM_OPTIONS = " rpm -i --test --noscripts "
     GRUB_FILES = ["boot/grub2/grub-usb.cfg", "boot/grub2/grub.cfg"]
+    ISO_RPM_KEY ="(none)"
 
     def __init__(self):
         self.iso_name = None
@@ -1331,6 +1332,41 @@ class Iso(object):
         all_rpms = map(lambda x: "%s/%s" % (repo_path, x), 
                        input_rpms_unique) + self.iso_rpms
         all_rpms = list(set(all_rpms))
+
+        # Verify RPM signatures and abort fail build if any RPM signature doesn't
+        # match with ISO signature to avoid install/boot issues.
+        # For older releases if RPM doesn't have signature, it will be (none)
+        # so verification will not have any problem with it.
+        PkgSigCheckList = []
+        try:
+           if self.iso_rpms:
+              valid_key=run_cmd("rpm -qip %s | grep %s"%(self.iso_rpms[0], "Signature"))
+              iso_key=valid_key["output"].split(" ")[-1].strip('\n')
+              logger.debug("ISO RPMS key:%s"%(iso_key))
+              Iso.ISO_RPM_KEY = iso_key
+           else:
+             # for HOST SMU
+             logger.debug("For host packages, using saved ISO rpm key:%s"%(Iso.ISO_RPM_KEY))
+             iso_key = Iso.ISO_RPM_KEY 
+
+           for pkg in all_rpms:
+             ret=run_cmd("rpm -qip %s | grep %s"%(pkg, "Signature"))
+             key=ret["output"].split(" ")[-1].strip('\n')
+             if key != iso_key:
+                logger.debug("%s key:%s doesn't match with iso image"%(os.path.basename(pkg), key))
+                PkgSigCheckList.append(os.path.basename(pkg))
+
+           if PkgSigCheckList:
+              logger.info("\nFollowing RPMs signature doesn't match with iso image\n")
+              for pkg in PkgSigCheckList:
+                  logger.info("\t(!) %s"%(pkg))
+
+              logger.error("\n\t...RPM signature check [Failed]")
+              return False, list(dup_input_rpms_set)
+           # No mismatch found in RPM signatures
+           logger.info("\n\t...RPM signature check [PASS]")
+        except:
+           logger.info("\n\t...Failed to complete RPM signature checks")
 
         for rpm in all_rpms:
             shutil.copy(rpm, rpm_staging_dir)
@@ -2572,6 +2608,7 @@ def main(argv):
                         giso.do_compat_check(local_card_arch_files, vm_type)
                     if result is False:
                         logger.error("\n\t...RPM compatibility check [FAIL]")
+                        rpm_db.cleanup_tmp_repo_path()
                         return
             #
             # 1.5.3 Remove rpms's from input list 
