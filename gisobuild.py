@@ -1340,8 +1340,14 @@ class Iso(object):
         PkgSigCheckList = []
         try:
            if self.iso_rpms:
-              valid_key=run_cmd("rpm -qip %s | grep %s"%(self.iso_rpms[0], "Signature"))
-              iso_key=valid_key["output"].split(" ")[-1].strip('\n')
+              for rpms in self.iso_rpms:
+                  valid_key=run_cmd("rpm -qip %s | grep %s"%(rpms, "Signature"))
+                  iso_key=valid_key["output"].split(" ")[-1].strip('\n')
+                  if iso_key == "(none)":
+                     logger.debug("No key found in %s"%(rpms))
+                     continue
+                  else:
+                      break
               logger.debug("ISO RPMS key:%s"%(iso_key))
               Iso.ISO_RPM_KEY = iso_key
            else:
@@ -1349,8 +1355,8 @@ class Iso(object):
              logger.debug("For host packages, using saved ISO rpm key:%s"%(Iso.ISO_RPM_KEY))
              iso_key = Iso.ISO_RPM_KEY 
 
-           for pkg in all_rpms:
-             ret=run_cmd("rpm -qip %s | grep %s"%(pkg, "Signature"))
+           for pkg in input_rpms_unique:
+             ret=run_cmd("rpm -qip %s/%s | grep %s"%(repo_path, pkg, "Signature"))
              key=ret["output"].split(" ")[-1].strip('\n')
              if key != iso_key:
                 logger.debug("%s key:%s doesn't match with iso image"%(os.path.basename(pkg), key))
