@@ -1248,7 +1248,6 @@ class Iso(object):
     RPM_TEST_LOG = "/tmp/rpmtest.log"
     RPM_OPTIONS = " rpm -i --test --noscripts "
     GRUB_FILES = ["boot/grub2/grub-usb.cfg", "boot/grub2/grub.cfg"]
-    ISO_RPM_KEY ="(none)"
 
     def __init__(self):
         self.iso_name = None
@@ -1315,7 +1314,7 @@ class Iso(object):
                                                  self.iso_extract_path))
         return self.iso_extract_path
 
-    def do_compat_check(self, repo_path, input_rpms):
+    def do_compat_check(self, repo_path, input_rpms, iso_key):
         rpm_file_list = ""
         if self.iso_extract_path is None:
             self.get_iso_extract_path()
@@ -1332,54 +1331,51 @@ class Iso(object):
         all_rpms = map(lambda x: "%s/%s" % (repo_path, x), 
                        input_rpms_unique) + self.iso_rpms
         all_rpms = list(set(all_rpms))
+        try:
+            for rpm in all_rpms:
+                shutil.copy(rpm, rpm_staging_dir)
+                rpm_file_list = "%s/rpms/%s  " % (rpm_file_list,
+                                              os.path.basename(rpm))
+            run_cmd("chmod 644 %s/rpms/*.rpm"%(self.iso_extract_path))
+        except:
+            logger.info("\n\t...Failed to copy files to staging directory")
 
-        # Verify RPM signatures and abort fail build if any RPM signature doesn't
+        # Verify RPM signatures and abort gISO build if any RPM signature doesn't
         # match with ISO signature to avoid install/boot issues.
         # For older releases if RPM doesn't have signature, it will be (none)
         # so verification will not have any problem with it.
         PkgSigCheckList = []
+        logger.debug("The ISO key is %s"%(iso_key))
         try:
-           if self.iso_rpms:
-              for rpms in self.iso_rpms:
-                  valid_key=run_cmd("rpm -qip %s | grep %s"%(rpms, "Signature"))
-                  iso_key=valid_key["output"].split(" ")[-1].strip('\n')
-                  if iso_key == "(none)":
-                     logger.debug("No key found in %s"%(rpms))
-                     continue
-                  else:
-                      break
-              logger.debug("ISO RPMS key:%s"%(iso_key))
-              Iso.ISO_RPM_KEY = iso_key
-           else:
-             # for HOST SMU
-             logger.debug("For host packages, using saved ISO rpm key:%s"%(Iso.ISO_RPM_KEY))
-             iso_key = Iso.ISO_RPM_KEY 
+            for pkg in input_rpms_unique:
+                ret=run_cmd("chroot %s rpm -qip rpms/%s | grep %s"%
+                            (self.iso_extract_path, pkg, "Signature"))
+                key=ret["output"].split(" ")[-1].strip('\n')
+                if iso_key != "(none)": 
+                   if key[8:] != iso_key:
+                      logger.debug("%s key:%s doesn't match with iso image"%
+                                        (os.path.basename(pkg), key[8:]))
+                      PkgSigCheckList.append(os.path.basename(pkg))
+                else: 
+                   if key != iso_key:
+                      logger.debug("%s key:%s doesn't match with iso image"%
+                                        (os.path.basename(pkg), key))
+                      PkgSigCheckList.append(os.path.basename(pkg))
 
-           for pkg in input_rpms_unique:
-             ret=run_cmd("rpm -qip %s/%s | grep %s"%(repo_path, pkg, "Signature"))
-             key=ret["output"].split(" ")[-1].strip('\n')
-             if key != iso_key:
-                logger.debug("%s key:%s doesn't match with iso image"%(os.path.basename(pkg), key))
-                PkgSigCheckList.append(os.path.basename(pkg))
-
-           if PkgSigCheckList:
-              logger.info("\nFollowing RPMs signature doesn't match with iso image\n")
-              for pkg in PkgSigCheckList:
+            if PkgSigCheckList:
+               logger.info("\nFollowing RPMs signature doesn't match with iso image\n")
+               for pkg in PkgSigCheckList:
                   logger.info("\t(!) %s"%(pkg))
 
-              logger.error("\n\t...RPM signature check [Failed]")
-              return False, list(dup_input_rpms_set)
-           # No mismatch found in RPM signatures
-           logger.info("\n\t...RPM signature check [PASS]")
+               logger.error("\n\t...RPM signature check [Failed]")
+               return False, list(dup_input_rpms_set)
+            #No mismatch found in RPM signatures
+            logger.info("\n\t...RPM signature check [PASS]")
         except:
            logger.info("\n\t...Failed to complete RPM signature checks")
 
-        for rpm in all_rpms:
-            shutil.copy(rpm, rpm_staging_dir)
-            rpm_file_list = "%s/rpms/%s  " % (rpm_file_list, 
-                                              os.path.basename(rpm))
+        # run compatibility check
         try:
-            run_cmd("chmod 644 %s/rpms/*.rpm"%(self.iso_extract_path))
             run_cmd("chroot %s %s %s" % (self.iso_extract_path, Iso.RPM_OPTIONS,
                     rpm_file_list))
         except Exception as e:
@@ -1444,6 +1440,7 @@ class Giso:
     GISO_INFO_TXT = "giso_info.txt"
     NESTED_ISO_PLATFORMS = ["ncs5500", "ncs560", "ncs540"]
     GISO_SCRIPT = "autorun"
+    ISO_RPM_KEY ="(none)"
     def __init__(self):
         self.repo_path = None
         self.bundle_iso = None
@@ -1508,6 +1505,20 @@ class Giso:
             self.bundle_iso = Iso() 
             self.bundle_iso.set_iso_info(self.system_image)
             
+    def set_iso_rpm_key(self, fs_root):
+        '''
+           get the GPG key and keep it for RPM signature key
+           verification.
+        '''
+        if os.path.isfile(fs_root+"/boot/certs/public-key.gpg"):
+           ret = run_cmd("chroot %s rpm --import %s"%(fs_root, "boot/certs/public-key.gpg"))
+           ret = run_cmd("chroot %s rpm -qa | grep %s"%(fs_root, "gpg-pubkey"))
+           key = ret["output"].split("-")[-2]
+           self.ISO_RPM_KEY = key
+           logger.debug("The ISO Key is %s\n"%(key))
+        else:
+           logger.debug("Failed to find public-key.gpg file")
+
     def set_vm_rpm_file_paths(self, rpm_file_paths, vm_type):
         self.vm_rpm_file_paths[vm_type] = rpm_file_paths
         
@@ -1613,7 +1624,7 @@ class Giso:
             self.vm_iso[vm_type] = iso
         else:
             iso = self.vm_iso[vm_type]
-        return iso.do_compat_check(self.repo_path, input_rpms)
+        return iso.do_compat_check(self.repo_path, input_rpms, self.ISO_RPM_KEY)
 
     def get_vm_type_iso_file(self, vm_type):
         iso_file_names = glob.glob('%s/iso/*' % 
@@ -1656,6 +1667,18 @@ class Giso:
             retval = True
         return retval
 
+    def giso_optional_label_supported(self):
+        version = self.get_bundle_iso_version()
+        version = version.split('.')
+        if int(version[0]) ==7:
+           if int(version[1])==0 and int(version[2]) >1:
+              return True
+           elif int(version[1])>=1 and int(version[2]) >= 1:
+              return True
+        elif int(version[0])>7:
+              return True
+        return False
+        
     def prepare_giso_info_txt(self, iso, sp_name):
         iso_name = iso.get_iso_name()
 
@@ -1735,7 +1758,10 @@ class Giso:
         iso_mdata = mdata['iso_mdata']
         iso_mdata['name'] = "%s-%s"%(giso_name_string, iso.get_iso_version())
         iso_mdata['bundle_name'] = "%s-%s"%(iso_name, iso.get_iso_version())
-        iso_mdata['label'] = self.giso_ver_label
+        if not self.giso_ver_label and self.giso_optional_label_supported():
+            iso_mdata['label'] = ""
+        else:
+            iso_mdata['label'] = self.giso_ver_label
         mdata['iso_mdata'] = iso_mdata
         mdata['golden ISO rpms'] = rpms_list
         fd = open(file_yaml, 'w')
@@ -1745,14 +1771,31 @@ class Giso:
  
         #New format GISO Name:(<platform>-<golden(k9)>-x-<version>-<label>.iso)
         if self.is_new_format_giso_name_supported(iso.get_iso_version()):
-            self.giso_name = '%s-%s-%s.%s' % (giso_name_string,
-                                          iso.get_iso_version(), 
+           if not self.giso_ver_label and self.giso_optional_label_supported():
+              logger.info('Info: Label is not specified so ' 
+                          'Golden ISO will not have any label ')
+              self.giso_name = '%s-%s.%s' % (giso_name_string,
+                                      iso.get_iso_version(), "iso")
+           else:
+              if not self.giso_ver_label:
+                 logger.info('Info: Golden ISO label is not specified '
+                          'so defaulting to 0')
+              self.giso_name = '%s-%s-%s.%s' % (giso_name_string,
+                                          iso.get_iso_version(),
                                           self.giso_ver_label, "iso")
         #Old format GISO Name:(<platform-name>-goldenk9-x.iso-<version>.<label>)
         else : 
-            self.giso_name = '%s.%s-%s.%s' % (giso_name_string, "iso",
-                                          iso.get_iso_version(), 
-                                          self.giso_ver_label)
+            if not self.giso_ver_label and self.giso_optional_label_supported():
+               self.giso_name = '%s.%s-%s' % (giso_name_string, "iso",
+                                        iso.get_iso_version())
+               logger.info('Info: Label is not specified so '
+                          'Golden ISO will not have any label') 
+            else:
+               logger.info('Info: Golden ISO label is not specified '
+                          'so defaulting to 0')
+               self.giso_name = '%s.%s-%s.%s' % (giso_name_string, "iso",
+                                           iso.get_iso_version(), 
+                                           self.giso_ver_label)
 
     def update_grub_cfg(self, iso):
         # update grub.cfg file with giso_boot parameter 
@@ -2431,8 +2474,6 @@ def parsecli():
         sys.exit(-1)
     if not pargs.gisoInfo and not pargs.gisoLabel:
         pargs.gisoLabel = 0
-        logger.info('Info: Golden ISO label is not specified '
-                    'so defaulting to 0')
     elif not pargs.gisoInfo and len(pargs.gisoLabel) > 1:
         logger.error('Error: Multiple Golden ISO labels are given.')
         logger.error('Info : Please provide unique Golden ISO label.')
@@ -2555,6 +2596,11 @@ def main(argv):
                 logger.info("Info: No Valid rpms nor XR config file found. "
                             "Nothing to do")
                 return
+
+        #
+        # get ISO RPM key
+        #
+        giso.set_iso_rpm_key(fs_root)
 
         # 1.5 Compatability Check
         for vm_type in giso.VM_TYPE:
