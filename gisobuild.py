@@ -375,7 +375,7 @@ class Rpmdb:
         self.vm_sp_rpm_file_paths = {"XR": None, "CALVADOS": None, "HOST": None}
         self.is_full_iso_require = False
 
-    def populate_rpmdb(self, fs_root, repo, platform, iso_version, full_iso):
+    def populate_rpmdb(self, fs_root, repo, platform, iso_version, full_iso, eRepo):
         retval = 0
         if not (repo and fs_root):
             logger.error('Invalid arguments')
@@ -385,6 +385,9 @@ class Rpmdb:
         if not len(repo_files):
             logger.info('RPM repository directory \'%s\' is empty!!' % repo)
             return 0 
+        # if it is gISO extend look at eRepo as well.
+        if eRepo is not None:
+           repo_files += glob.glob(eRepo+"/*")
         rpm_name_version_release_arch_list = []
         if full_iso:
             self.is_full_iso_require = True
@@ -1314,7 +1317,7 @@ class Iso(object):
                                                  self.iso_extract_path))
         return self.iso_extract_path
 
-    def do_compat_check(self, repo_path, input_rpms, iso_key):
+    def do_compat_check(self, repo_path, input_rpms, iso_key, eRepo):
         rpm_file_list = ""
         if self.iso_extract_path is None:
             self.get_iso_extract_path()
@@ -1333,9 +1336,15 @@ class Iso(object):
         all_rpms = list(set(all_rpms))
         try:
             for rpm in all_rpms:
+              if os.path.isfile(rpm):
                 shutil.copy(rpm, rpm_staging_dir)
                 rpm_file_list = "%s/rpms/%s  " % (rpm_file_list,
                                               os.path.basename(rpm))
+              else:
+                # if RPM doesn't exist look at eRepo
+                eRpm = rpm.split('/')[-1]
+                shutil.copy(eRepo+'/'+eRpm, rpm_staging_dir)
+                rpm_file_list = "%s/rpms/%s " % (rpm_file_list, eRpm)
             run_cmd("chmod 644 %s/rpms/*.rpm"%(self.iso_extract_path))
         except:
             logger.info("\n\t...Failed to copy files to staging directory")
@@ -1462,6 +1471,13 @@ class Giso:
         self.giso_name_string = None
         self.script = None
         self.is_full_iso_require = False
+        self.is_extend_giso = False
+        self.xr_extgiso_rpms = [] 
+        self.cal_extgiso_rpms = []
+        self.host_extgiso_rpms = []
+        self.gisoExtendRpms = 0
+        self.ExtendRpmRepository = None
+
         
     #
     # Giso object Setter Api's
@@ -1471,6 +1487,8 @@ class Giso:
         self.bundle_iso = Iso() 
         self.bundle_iso.set_iso_info(iso_path)
         plat = self.get_bundle_iso_platform_name()
+        if self.is_extend_giso:
+           self.do_extend_giso(self.bundle_iso.iso_mount_path)
         if OPTIMIZE_CAPABLE and not args.optimize:
             self.giso_rpm_path = DEFAULT_RPM_PATH
             logger.debug("Golden ISO RPM_PATH: %s" % self.giso_rpm_path)
@@ -1504,7 +1522,105 @@ class Giso:
             self.bundle_iso.__exit__(None, None, None)
             self.bundle_iso = Iso() 
             self.bundle_iso.set_iso_info(self.system_image)
-            
+    def gisoExtendExtractSignedRpmPath(self, repo):
+        '''
+           Find the RPM location and extract rpms
+           giso is of SIGNED_RPM_PATH
+        '''
+        pwd = os.getcwd()
+        print("working dir %s"%(pwd))
+        optimised_rpm_path = tempfile.mkdtemp(dir=pwd)
+        if os.path.exists(optimised_rpm_path):
+           #print("ISO MOUNTED AT  %s"%(IsoMountPath))
+           os.chdir(optimised_rpm_path)
+           run_cmd("zcat -f  %s | cpio -idu"%(repo+"/boot/initrd.img"))
+           run_cmd("isoinfo -R -i iso/system_image.iso -x /boot/initrd.img >initrd2.img")
+           run_cmd("zcat -f initrd2.img | cpio -idu")
+           os.chdir(pwd)
+           return optimised_rpm_path
+        else:
+           logger.error("Failed to create directory to extract RPMs")
+           return None
+    # Extend the gISO, if input is existing gISO instead of mini.iso
+    # it appends rpms in repository to the existing gISO
+    # so we can build gISO incrementally with having only
+    # new set of RPMs needed in repository, without worrying rpms
+    # present in gISO
+    #
+    def do_extend_giso(self, GisoMountDir):
+        '''
+        Look at the given gISO mounted directory and check what all
+        rpms exist in the given gISO and copy them to repo for
+        extending the gISO
+        '''
+
+        # Find RPM path in the Giso
+        RpmPathInGiso = ""
+        with open(GisoMountDir+"/giso_info.txt", 'r') as fd:
+             GisoInfo = fd.read()
+        for line in GisoInfo.split('\n'):
+            if line.split(' ')[0] == 'RPM_PATH:':
+               RpmPathInGiso = line.split(' ')[-1]
+               break
+        logger.debug("RPM location in the given gISO %s"%(RpmPathInGiso))
+
+        if DEFAULT_RPM_PATH == RpmPathInGiso:
+           iso_rpm_path = GisoMountDir 
+        elif SIGNED_RPM_PATH == RpmPathInGiso:
+            iso_rpm_path = self.get_bundle_iso_extract_path()
+        elif SIGNED_NCS5500_RPM_PATH == RpmPathInGiso:
+             iso_rpm_path = self.gisoExtendExtractSignedRpmPath(GisoMountDir)
+        else:
+           print("Coudn't determine RPM location in input gISO, failed extend gISO\n")
+           return False
+        # create repository for giso rpms
+        pwd = cwd
+        extended_rpm_dir = tempfile.mkdtemp(dir=pwd) 
+        if extended_rpm_dir is None:
+           logger.info("Failed to create staging directory for RPMS")
+           return False
+
+        logger.info("Following RPMS found in the input gISO")
+        if os.path.exists(iso_rpm_path+"/xr_rpms"): 
+           xr_extgiso_rpms = glob.glob(iso_rpm_path+"/xr_rpms/*")
+           for rpm in xr_extgiso_rpms:
+               self.xr_extgiso_rpms.append(os.path.basename(rpm))
+               logger.info("\t%s"%(os.path.basename(rpm)))
+           ret=run_cmd("cp %s/xr_rpms/* %s/"%(iso_rpm_path, extended_rpm_dir))
+           self.gisoExtendRpms += len(self.xr_extgiso_rpms)
+
+
+        if os.path.exists(iso_rpm_path+"/calvados_rpms"):
+           cal_extgiso_rpms = glob.glob(iso_rpm_path+"/calvados_rpms/*")
+           for rpm in cal_extgiso_rpms:
+               self.cal_extgiso_rpms.append(os.path.basename(rpm))
+               logger.info("\t%s"%(os.path.basename(rpm)))
+           ret=run_cmd("cp %s/calvados_rpms/* %s/"%(iso_rpm_path, extended_rpm_dir))
+           self.gisoExtendRpms += len(self.cal_extgiso_rpms)
+
+        if os.path.exists(iso_rpm_path+"/host_rpms"):
+           host_extgiso_rpms = glob.glob(iso_rpm_path+"/host_rpms/*")
+           for rpm in host_extgiso_rpms:
+               self.host_extgiso_rpms.append(os.path.basename(rpm))
+               logger.info("\t%s"%(os.path.basename(rpm)))
+           ret=run_cmd("cp %s/host_rpms/* %s/"%(iso_rpm_path, extended_rpm_dir))
+           self.gisoExtendRpms += len(self.host_extgiso_rpms)
+        self.ExtendRpmRepository = extended_rpm_dir
+
+        # if input is optimised gISO then we have to extract rpms from
+        # initrd so rpm path is not iso mount path, needs to be cleaned
+        if SIGNED_NCS5500_RPM_PATH == RpmPathInGiso:
+           shutil.rmtree(iso_rpm_path)
+
+    def do_extend_clean(self, eRepo):
+        '''
+            clear extend specific things
+        '''
+        logger.debug("Extend gISO cleaned")
+        if eRepo is not None and os.path.exists(eRepo): 
+           shutil.rmtree(eRepo)
+           pass
+
     def set_iso_rpm_key(self, fs_root):
         '''
            get the GPG key and keep it for RPM signature key
@@ -1624,7 +1740,8 @@ class Giso:
             self.vm_iso[vm_type] = iso
         else:
             iso = self.vm_iso[vm_type]
-        return iso.do_compat_check(self.repo_path, input_rpms, self.ISO_RPM_KEY)
+        return iso.do_compat_check(self.repo_path, input_rpms,
+                                   self.ISO_RPM_KEY, self.ExtendRpmRepository)
 
     def get_vm_type_iso_file(self, vm_type):
         iso_file_names = glob.glob('%s/iso/*' % 
@@ -1686,6 +1803,11 @@ class Giso:
             golden_string = Giso.GOLDEN_K9_STRING
         elif "-mini-" in iso_name:
             golden_string = Giso.GOLDEN_STRING
+        elif self.is_extend_giso:
+             if self.k9sec_present:
+                golden_string = Giso.GOLDEN_K9_STRING
+             else:
+                golden_string = Giso.GOLDEN_STRING
         else:
             logger.info("Given iso(%s.%s) is not supported" % (iso_name, "iso"))
             return -1
@@ -1999,7 +2121,13 @@ class Giso:
                 if rpm_files is not None:
                     giso_repo_path = "%s/%s_rpms" % (self.giso_dir, 
                                                      str(vm_type).lower())
-                    os.mkdir(giso_repo_path)
+                    try:
+                        os.mkdir(giso_repo_path)
+                    except:
+                        if self.is_extend_giso: 
+                           logger.debug("Info: extending, giso directory exist") 
+                        else:
+                           raise
                     if vm_type == CALVADOS_SUBSTRING:
                         vm_type = SYSADMIN_SUBSTRING
                     logger.info("\n%s rpms:" % vm_type)
@@ -2053,7 +2181,11 @@ class Giso:
                                 if duplicate_present:
                                     continue
                         rpm_count += 1
-                        shutil.copy('%s/%s' % (self.repo_path, rpm_file),
+                        if os.path.isfile(self.repo_path+'/'+rpm_file):
+                           repo=self.repo_path 
+                        else:
+                           repo=self.ExtendRpmRepository
+                        shutil.copy('%s/%s' % (repo, rpm_file),
                                     giso_repo_path)
                         logger.info('\t%s' % (os.path.basename(rpm_file)))
                         fdr.write("%s\n"%os.path.basename(rpm_file))
@@ -2251,7 +2383,8 @@ class Giso:
         rpms_path = glob.glob('%s/*_rpms' % extract_system_image_initrd_path)
         if len(rpms_path):
             # Move the RPMS to initrd content
-            run_cmd("mv  -f %s/*_rpms %s " % (extract_system_image_initrd_path, extract_initrd_r71x))
+            run_cmd("cp  -fr %s/*_rpms %s " % (extract_system_image_initrd_path, extract_initrd_r71x))
+            run_cmd("rm -rf %s/*_rpms" % (extract_system_image_initrd_path))
         # Move giso metadata to initrd content
         run_cmd("cp  -f %s/giso_* %s " % (extract_system_image_initrd_path, extract_initrd_r71x))
         if os.path.isfile(extract_system_image_initrd_path+"/sp_info.txt"):
@@ -2300,7 +2433,8 @@ class Giso:
         rpms_path = glob.glob('%s/*_rpms' % self.giso_dir)
         if len(rpms_path):
             # Move the RPMS to system_image.iso content
-            run_cmd("mv  -f %s/*_rpms %s " % (self.giso_dir, new_initrd_path))
+            run_cmd("cp -r %s/*_rpms %s " % (self.giso_dir, new_initrd_path))
+            run_cmd("rm -rf %s/*_rpms" % (self.giso_dir))
 
         # Move giso metadata to system_image.iso content
         run_cmd("cp  -f %s/giso_* %s " % (self.giso_dir, new_initrd_path))
@@ -2399,6 +2533,9 @@ def parsecli():
     parser.add_argument('-l', '--label', dest='gisoLabel', type=str,
                         required=False, action='append',
                         help='Golden ISO Label')
+    parser.add_argument('-e', '--extend', dest='gisoExtend', 
+                        action='store_true', required=False,
+                        help='extend gISO by adding more rpms to existing gISO')
 
     parser.add_argument('-m', '--migration', dest='migTar', action='store_true',
                         help='To build Migration tar only for ASR9k')
@@ -2485,6 +2622,12 @@ def parsecli():
             logger.error('Error: label %s contains characters other than alphanumeric and underscore', pargs.gisoLabel[0])
             logger.error('Info : Non-alphanumeric characters except underscore are not allowed in GISO label ')
             sys.exit(-1)
+    if pargs.gisoExtend:
+       if  re.match('.*golden.*', str(pargs.bundle_iso)):
+           pass
+       else:
+           logger.error("To Extend gISO, please provide previously built gISO as input iso")
+           sys.exit(-1)
 
     return pargs
 
@@ -2500,6 +2643,9 @@ def print_giso_info(iso_file):
 
 def main(argv):
     with Giso() as giso:
+        # set Extend gISO it is incremental giso build
+        if argv.gisoExtend:
+           giso.is_extend_giso = True
         giso.set_giso_info(argv.bundle_iso[0])
         logger.debug("\nFound Bundle ISO: %s" % 
                      (os.path.abspath(argv.bundle_iso[0])))
@@ -2515,6 +2661,9 @@ def main(argv):
             return
 
         if not giso.is_bundle_image_type_supported():
+          if argv.gisoExtend:
+             logger.info("\n\t... Extending the gISO ..")
+          else:
             logger.error("Error: Image %s is neither mini.iso nor minik9.iso"
                          % (giso.get_bundle_iso_name()))
             logger.error("Only mini or minik9 image type "
@@ -2557,7 +2706,8 @@ def main(argv):
             rpm_db.populate_rpmdb(fs_root, os.path.abspath(argv.rpmRepo[0]),
                  giso.get_bundle_iso_platform_name(), 
                  giso.get_bundle_iso_version(),
-                 giso.is_full_iso_require)
+                 giso.is_full_iso_require,
+                 giso.ExtendRpmRepository)
 
             # 1.3.2 Seperate Cisco and TP rpms in RPM data base
             rpm_db.populate_tp_cisco_list(giso.get_bundle_iso_platform_name())
@@ -2597,6 +2747,11 @@ def main(argv):
                             "Nothing to do")
                 return
 
+        if argv.gisoExtend and not argv.xrConfig:
+           if giso.gisoExtendRpms == len(rpm_db.rpm_list):
+              logger.info("..No new RPMs present in the repository,"
+                         " input gISO contain all the rpm/package in the repository")
+              return
         #
         # get ISO RPM key
         #
@@ -2703,6 +2858,9 @@ def main(argv):
 
         logger.info('\nBuilding Golden ISO...')
         result = giso.build_giso(rpm_db, argv.bundle_iso[0])
+        # clean old giso rpms from repository
+        if argv.gisoExtend:
+           giso.do_extend_clean(giso.ExtendRpmRepository)
         rpm_db.cleanup_tmp_repo_path()
         if not result:
             logger.info('\n\t...Golden ISO creation SUCCESS.') 
