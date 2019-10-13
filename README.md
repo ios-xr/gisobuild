@@ -18,6 +18,9 @@ Path to XR config file
 Golden ISO Label
 -m, --migration To build Migration tar only for ASR9k
 -v, --version Print version of this script and exit
+-e, --extend  Adding/appending more rpms to previously built gISO
+-f, --fullISO  To build full iso only for xrv9k
+-g, --gisoInfo To display Golden ISO Information
 ```
 
 Required arguments:
