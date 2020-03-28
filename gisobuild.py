@@ -26,7 +26,7 @@ import commands
 import stat
 import pprint
 
-__version__ = '0.12'
+__version__ = '0.13'
 GISO_PKG_FMT_VER = 1.0
 
 try:
@@ -58,6 +58,7 @@ SIGNED_NCS5500_RPM_PATH =  'giso/boot/initrd.img/iso/system_image.iso/boot/initr
 SIGNED_651_NCS5500_RPM_PATH = 'giso/boot/initrd.img/iso/system_image.iso/<rpms>'
 OPTIMIZE_CAPABLE = os.path.exists('/sw/packages/jam_IOX/signing/xr_sign')
 AUTO_RPM_BINARY_PATH = "/auto/thirdparty-sdk/host-x86_64/lib/rpm-5.1.9/rpm"
+global_platform_name="None"
 
 def run_cmd(cmd):
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, 
@@ -374,6 +375,7 @@ class Rpmdb:
         self.sp_mount_path = None
         self.vm_sp_rpm_file_paths = {"XR": None, "CALVADOS": None, "HOST": None}
         self.is_full_iso_require = False
+        self.is_skip_dep_check = False
 
     def populate_rpmdb(self, fs_root, repo, platform, iso_version, full_iso, eRepo):
         retval = 0
@@ -1261,6 +1263,20 @@ class Iso(object):
         self.iso_extract_path = None
         self.iso_platform_name = None
         self.system_image_extract_path = None
+        self.com_iso_path = None
+        self.com_iso_mount_path = None
+        self.iso_pkg_fmt_ver = None
+        self.shrinked_iso_extract_path = None
+
+    def create_com_iso_path(self, iso_path):
+        dirpath = os.path.dirname(iso_path)
+        basename = os.path.basename(iso_path)
+        #print "self.iso_platform_name = %s" % (self.iso_platform_name)
+        if "host" in self.iso_platform_name:
+            com_iso_name = "%s-common.iso" %(global_platform_name)
+        else:
+            com_iso_name = "%s-common.iso" %(self.iso_platform_name)
+        self.com_iso_path = "%s/%s" % (dirpath, com_iso_name)
 
     def set_iso_info(self, iso_path):
         #if os.system("losetup -f &> /dev/null") != 0:
@@ -1270,6 +1286,7 @@ class Iso(object):
         pwd = cwd
         self.iso_path = iso_path
         self.iso_mount_path = tempfile.mkdtemp(dir=pwd)      
+        self.com_iso_mount_path = tempfile.mkdtemp(dir=pwd)      
         readiso(self.iso_path, self.iso_mount_path)
         iso_info_file = open("%s/%s" % (self.iso_mount_path, Iso.ISO_INFO_FILE),
                              'r')
@@ -1278,7 +1295,19 @@ class Iso(object):
         self.iso_platform_name = self.iso_name.split("-")[0] 
         self.iso_version = \
             iso_info_raw[iso_info_raw.find("Version:"):].split(" ")[1]
+        self.iso_pkg_fmt_ver = \
+            iso_info_raw[iso_info_raw.find("PKG_FORMAT_VER:"):].split(" ")[1]
         self.iso_rpms = glob.glob('%s/rpm/*/*' % self.iso_mount_path)
+        if self.iso_pkg_fmt_ver >= "1.2":
+            self.create_com_iso_path(self.iso_path)
+            #print "self.com_iso_path = %s" % self.com_iso_path
+            if os.path.exists(self.com_iso_path):
+                readiso(self.com_iso_path, self.com_iso_mount_path)
+                #print "self.com_iso_path = %s is valid " % self.com_iso_path
+            else:
+                self.com_iso_path = None
+                #print "self.com_iso_path = %s is not valid " % self.com_iso_path
+            
         iso_info_file.close()
 
     # Iso getter apis
@@ -1297,15 +1326,38 @@ class Iso(object):
     def get_iso_mount_path(self):
         return self.iso_mount_path
 
+    def get_com_iso_mount_path(self):
+        return self.com_iso_mount_path
+
     def get_iso_extract_path(self):
         if self.iso_extract_path is not None:
             return self.iso_extract_path 
         else:
-            pwd = cwd
+            pwd = os.getcwd()
             self.iso_extract_path = tempfile.mkdtemp(dir=pwd)
             if self.iso_extract_path is not None:
                 os.chdir(self.iso_extract_path)
                 run_cmd("zcat -f %s%s | cpio -id" % (self.iso_mount_path,
+                        Iso.ISO_INITRD_RPATH))
+                # if single initrd image
+                if self.iso_pkg_fmt_ver >= "1.2" and self.com_iso_path is not None:
+                   run_cmd("zcat -f %s%s | cpio -idu" % (self.com_iso_mount_path,
+                        Iso.ISO_INITRD_RPATH))
+                # if shrinked asr9k image
+                cpio_file = glob.glob('files.*.cpio')
+                if len(cpio_file):
+                    logger.debug("CPIO file present : %s" % cpio_file[0])
+                    # copy for nested giso where shrinked mini iso is used
+                    self.shrinked_iso_extract_path = tempfile.mkdtemp(dir=pwd)
+                    run_cmd("cp -fr %s/* %s " % (self.iso_extract_path, self.shrinked_iso_extract_path))
+                    pwd1 = os.getcwd()
+                    cpioext = tempfile.mkdtemp(dir=pwd1)
+                    os.chdir(cpioext)
+                    run_cmd("cpio -idmu < %s/%s " % (self.iso_extract_path, cpio_file[0]))
+                    logger.debug("CPIO %s extract path %s" % (cpio_file[0], 
+                                                 cpioext))
+                    os.chdir(pwd1)
+                    run_cmd("zcat -f %s%s | cpio -idu" % (cpioext,
                         Iso.ISO_INITRD_RPATH))
                 run_cmd("chmod -R 777 ./")
                 os.chdir(pwd)
@@ -1316,6 +1368,9 @@ class Iso(object):
         logger.debug("ISO %s extract path %s" % (self.iso_name, 
                                                  self.iso_extract_path))
         return self.iso_extract_path
+
+    def get_shrinked_iso_extract_path(self):
+        return self.shrinked_iso_extract_path
 
     def do_compat_check(self, repo_path, input_rpms, iso_key, eRepo):
         rpm_file_list = ""
@@ -1424,6 +1479,9 @@ class Iso(object):
             if self.iso_extract_path and os.path.exists(self.iso_extract_path):
                 logger.debug("iso extract path %s" % self.iso_extract_path)
                 shutil.rmtree(self.iso_extract_path)
+            if self.shrinked_iso_extract_path and os.path.exists(self.shrinked_iso_extract_path):
+                logger.debug("shrinked iso extract path %s" % self.shrinked_iso_extract_path)
+                shutil.rmtree(self.shrinked_iso_extract_path)
             if self.system_image_extract_path and os.path.exists(self.system_image_extract_path):
                 logger.debug("iso extract path %s" % self.system_image_extract_path)
                 shutil.rmtree(self.system_image_extract_path)
@@ -1433,6 +1491,12 @@ class Iso(object):
                     logger.debug("Unmounted iso successfully %s" % 
                                  self.iso_mount_path)
                 shutil.rmtree(self.iso_mount_path)
+            if self.com_iso_mount_path and os.path.exists(self.com_iso_mount_path):
+                if os.path.ismount(self.com_iso_mount_path):
+                    run_cmd(" umount " + self.com_iso_mount_path)
+                    logger.debug("Unmounted iso successfully %s" % 
+                                 self.com_iso_mount_path)
+                shutil.rmtree(self.com_iso_mount_path)
         except (IOError, os.error) as why:
             logger.error("Exception why ? = " + str(why))
 
@@ -1477,6 +1541,7 @@ class Giso:
         self.host_extgiso_rpms = []
         self.gisoExtendRpms = 0
         self.ExtendRpmRepository = None
+        self.is_skip_dep_check = False
 
         
     #
@@ -1683,6 +1748,9 @@ class Giso:
 
     def get_bundle_iso_extract_path(self):
         return self.bundle_iso.get_iso_extract_path()
+
+    def get_bundle_shrinked_iso_extract_path(self):
+        return self.bundle_iso.get_shrinked_iso_extract_path()
 
     def get_bundle_iso_mount_path(self):
         return self.bundle_iso.get_iso_mount_path()
@@ -2425,7 +2493,10 @@ class Giso:
     def recreate_initrd_non_nested_platform(self):
         """ Extract initrd and add RPMs and metadatafile """
         pwd = cwd
-        extracted_bundle_path = self.get_bundle_iso_extract_path()
+        if self.get_bundle_shrinked_iso_extract_path() is not None:
+            extracted_bundle_path = self.get_bundle_shrinked_iso_extract_path()
+        else :
+            extracted_bundle_path = self.get_bundle_iso_extract_path()
         new_initrd_path = tempfile.mkdtemp(dir=pwd)
         run_cmd("cp -fr %s/* %s " % (extracted_bundle_path, new_initrd_path))
         run_cmd("rm -f %s/*.rpm  " % (new_initrd_path))
@@ -2549,6 +2620,9 @@ def parsecli():
     parser.add_argument('-f', '--fullISO', dest='fullISO', action='store_true',
                         help='To build full iso only for xrv9k')
 
+    parser.add_argument('-d', '--skip-dep-check', dest='skipDepCheck', action='store_true',
+                        help='To build giso by skipping dependency check')
+
     parser.add_argument('-g', '--gisoInfo', dest='gisoInfo', action='store_true',
                         help='To display Golden ISO Information')
 
@@ -2649,6 +2723,9 @@ def main(argv):
         giso.set_giso_info(argv.bundle_iso[0])
         logger.debug("\nFound Bundle ISO: %s" % 
                      (os.path.abspath(argv.bundle_iso[0])))
+        global global_platform_name
+
+        global_platform_name =  giso.get_bundle_iso_platform_name()
         logger.info("\nPlatform: %s Version: %s" % 
                     (giso.get_bundle_iso_platform_name(),
                      giso.get_bundle_iso_version()))
@@ -2690,6 +2767,10 @@ def main(argv):
             logger.info("\nInfo: fullISO option is provided so fullISO will be generated")
             giso.is_full_iso_require = True
 
+        if argv.skipDepCheck:
+            logger.info("\nInfo: skipDepCheck option is provided so GISO will be generated without dep check")
+            giso.is_skip_dep_check = True
+            giso.is_full_iso_require = True
         #
         # 1.2 Scan for XR-Config file. 
         #
@@ -2755,7 +2836,8 @@ def main(argv):
         #
         # get ISO RPM key
         #
-        giso.set_iso_rpm_key(fs_root)
+        if not giso.is_full_iso_require and not giso.is_skip_dep_check: 
+            giso.set_iso_rpm_key(fs_root)
 
         # 1.5 Compatability Check
         for vm_type in giso.VM_TYPE:
@@ -2809,7 +2891,7 @@ def main(argv):
             #
             # 1.5.2   Perform Compatibilty check
             #
-            if not giso.is_full_iso_require: 
+            if not giso.is_full_iso_require and not giso.is_skip_dep_check: 
                 if local_card_arch_files:
                     result, dup_rpm_files = \
                         giso.do_compat_check(local_card_arch_files, vm_type)
