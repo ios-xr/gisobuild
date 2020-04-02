@@ -26,7 +26,7 @@ import commands
 import stat
 import pprint
 
-__version__ = '0.13'
+__version__ = '0.14'
 GISO_PKG_FMT_VER = 1.0
 
 try:
@@ -51,7 +51,6 @@ HOST_SUBSTRING = 'HOST'
 SMU_SUBSTRING = 'SMU'
 XR_SUBSTRING = 'XR'
 OPTIONS = None
-CER_TAR_FILE = "/ws/skewat-bgl/platform_cer.tar"
 DEFAULT_RPM_PATH = 'giso/<rpms>'
 SIGNED_RPM_PATH =  'giso/boot/initrd.img/<rpms>'
 SIGNED_NCS5500_RPM_PATH =  'giso/boot/initrd.img/iso/system_image.iso/boot/initrd.img/<rpms>'
@@ -1311,6 +1310,9 @@ class Iso(object):
         iso_info_file.close()
 
     # Iso getter apis
+    def get_iso_path(self):
+        return self.iso_path
+
     def get_iso_name(self):
         return self.iso_name
 
@@ -1508,6 +1510,7 @@ class Giso:
     ISO_INFO_FILE = "iso_info.txt"
     VM_TYPE = ["XR", "CALVADOS", "HOST"]
     XR_CONFIG_FILE_NAME = "router.cfg"
+    ZTP_INI_FILE_NAME = "ztp.ini"
     GOLDEN_STRING = "golden"
     GOLDEN_K9_STRING = "goldenk9"
     GISO_INFO_TXT = "giso_info.txt"
@@ -1521,6 +1524,7 @@ class Giso:
         self.giso_dir = None
         self.vm_rpm_file_paths = {"XR": None, "CALVADOS": None, "HOST": None}
         self.xrconfig = None
+        self.ztp_ini = None
         self.system_image = None
         self.supp_archs = {'HOST': ['x86_64'], 'CALVADOS': ['x86_64'],
                            'XR': ['x86_64']}
@@ -1705,6 +1709,9 @@ class Giso:
         
     def set_xrconfig(self, xrconfig):
         self.xrconfig = xrconfig
+
+    def set_ztpini(self, ztp_ini):
+        self.ztp_ini = ztp_ini
 
     def set_repo_path(self, repo_path):
         self.repo_path = repo_path
@@ -2155,6 +2162,7 @@ class Giso:
     def build_giso(self, rpm_db, iso_path):
         rpms = False
         config = False 
+        ztp_ini = False
         service_pack = False
         pwd = cwd
         rpm_count = 0
@@ -2314,6 +2322,13 @@ class Giso:
                                                   Giso.XR_CONFIG_FILE_NAME))
             config = True
 
+        if self.ztp_ini:
+            logger.info("\nZTP INI file:")
+            logger.info('\t%s' % Giso.ZTP_INI_FILE_NAME)
+            shutil.copy(self.ztp_ini, "%s/%s" % (self.giso_dir, 
+                                                  Giso.ZTP_INI_FILE_NAME))
+            ztp_ini = True
+
         if self.sp_info_path:
             #logger.info('\t%s' % self.sp_info_path)
             logger.info("\nService Pack:")
@@ -2332,7 +2347,7 @@ class Giso:
  
         rpm_db.cleanup_tmp_sp_data()
 
-        if not (rpms or service_pack or config or script):
+        if not (rpms or service_pack or config or script or ztp_ini):
             logger.info("Final rpm list or service pack is Zero and "
                         "there is no XR config/user script specified")
             logger.info("Nothing to do")
@@ -2394,6 +2409,8 @@ class Giso:
                run_cmd("cp  -f %s/%s %s " % (self.giso_dir, Giso.XR_CONFIG_FILE_NAME, self.system_image_extract_path))
             if os.path.isfile(self.giso_dir+"/"+Giso.GISO_SCRIPT):
                run_cmd("cp  -f %s/%s %s " % (self.giso_dir, Giso.GISO_SCRIPT, self.system_image_extract_path))
+            if os.path.isfile(self.giso_dir+"/"+Giso.ZTP_INI_FILE_NAME):
+               run_cmd("cp  -f %s/%s %s " % (self.giso_dir, Giso.ZTP_INI_FILE_NAME, self.system_image_extract_path))
             run_cmd("cp  -f %s/*.yml %s " % (self.giso_dir, self.system_image_extract_path))
 
             # update iso_info.txt file with giso name
@@ -2451,8 +2468,7 @@ class Giso:
         rpms_path = glob.glob('%s/*_rpms' % extract_system_image_initrd_path)
         if len(rpms_path):
             # Move the RPMS to initrd content
-            run_cmd("cp  -fr %s/*_rpms %s " % (extract_system_image_initrd_path, extract_initrd_r71x))
-            run_cmd("rm -rf %s/*_rpms" % (extract_system_image_initrd_path))
+            run_cmd("mv  -f %s/*_rpms %s " % (extract_system_image_initrd_path, extract_initrd_r71x))
         # Move giso metadata to initrd content
         run_cmd("cp  -f %s/giso_* %s " % (extract_system_image_initrd_path, extract_initrd_r71x))
         if os.path.isfile(extract_system_image_initrd_path+"/sp_info.txt"):
@@ -2463,6 +2479,9 @@ class Giso:
         if os.path.isfile(extract_system_image_initrd_path+"/"+Giso.GISO_SCRIPT):
            run_cmd("cp  -f %s/%s %s " % (extract_system_image_initrd_path,
                                   Giso.GISO_SCRIPT, extract_initrd_r71x))
+        if os.path.isfile(extract_system_image_initrd_path+"/"+Giso.ZTP_INI_FILE_NAME):
+           run_cmd("cp  -f %s/%s %s " % (extract_system_image_initrd_path,
+                                  Giso.ZTP_INI_FILE_NAME, extract_initrd_r71x))
 
 
         run_cmd("cp  -f %s/*.yml %s " % (extract_system_image_initrd_path, extract_initrd_r71x))
@@ -2504,8 +2523,7 @@ class Giso:
         rpms_path = glob.glob('%s/*_rpms' % self.giso_dir)
         if len(rpms_path):
             # Move the RPMS to system_image.iso content
-            run_cmd("cp -r %s/*_rpms %s " % (self.giso_dir, new_initrd_path))
-            run_cmd("rm -rf %s/*_rpms" % (self.giso_dir))
+            run_cmd("mv  -f %s/*_rpms %s " % (self.giso_dir, new_initrd_path))
 
         # Move giso metadata to system_image.iso content
         run_cmd("cp  -f %s/giso_* %s " % (self.giso_dir, new_initrd_path))
@@ -2517,6 +2535,9 @@ class Giso:
         if os.path.isfile(self.giso_dir+"/"+Giso.GISO_SCRIPT):
            run_cmd("cp  -f %s/%s %s " % (self.giso_dir, \
                                   Giso.GISO_SCRIPT, new_initrd_path))
+        if os.path.isfile(self.giso_dir+"/"+Giso.ZTP_INI_FILE_NAME):
+           run_cmd("cp  -f %s/%s %s " % (self.giso_dir, \
+                                  Giso.ZTP_INI_FILE_NAME, new_initrd_path))
 
 
         run_cmd("cp  -f %s/*.yml %s " % (self.giso_dir, new_initrd_path))
@@ -2528,19 +2549,58 @@ class Giso:
         # Cleanup
         shutil.rmtree(new_initrd_path)
 
+    def create_sign_env(self):
+        """ Pretend to be in workspace as thats a requirement for signing and
+            get platforms .cer and .der files
+        """
+        logger.debug("Creating signing environment...")
+        logger.debug("ISO path: %s" %(self.bundle_iso.get_iso_path()))
+        plat = self.get_bundle_iso_platform_name()
+        if plat in Giso.NESTED_ISO_PLATFORMS :
+            cmd = "isoinfo -i %s -R -x /boot/initrd.img | " \
+                  "cpio -i --to-stdout --quiet  etc/show_version.txt | " \
+                  "grep \"Lineup =\" | cut -d ' ' -f3" \
+                   %(self.bundle_iso.get_iso_path())
+        else :
+            cmd = "isoinfo -i %s -R -x /boot/initrd.img | gunzip -c | " \
+                  "cpio -i --to-stdout --quiet  etc/show_version.txt | " \
+                  "grep \"Lineup =\" | cut -d ' ' -f3" \
+                   %(self.bundle_iso.get_iso_path())
+        pwd=os.getcwd()
+        # In case of nested platform we will be inside tmp directory
+        # to sign the inner initrd. To access the iso here if relative path
+        # of mini is provided we temporariliy moved to build directory 
+        os.chdir(cwd)
+        result = run_cmd(cmd)
+        os.chdir(pwd) 
+        devline = result["output"].rstrip("\n")
+        logger.debug("Devline: %s" %devline)
+        cmd = "acme dp -devline %s | grep tools/code-sign > my_lineup_file.lu" %devline
+        result = run_cmd(cmd)
+        pwd=os.getcwd()
+        tmp_tool_dir = tempfile.mkdtemp(dir=pwd)
+        os.chdir(tmp_tool_dir)
+        cmd = "acme nw -lineup ../my_lineup_file.lu"
+        result = run_cmd(cmd)
+        os.chdir(pwd)
+        cmd="rm -f my_lineup_file.lu"
+        run_cmd(cmd)
+        cmd="cp -rf %s/* %s/" %(tmp_tool_dir, pwd)
+        run_cmd(cmd)
+        cmd="cp -rf %s/.[a-zA-Z0-9]* %s/" %(tmp_tool_dir, pwd)
+        run_cmd(cmd)
+        cmd="rm -rf %s" %(tmp_tool_dir)
+        run_cmd(cmd)
+
     def update_signature(self, path):
         """ Pretend to be in workspace as thats a requirement for signing and 
             get platforms .cer and .der files
         """
-
+        if not os.path.exists("tools") or not os.path.exists(".ACMEROOT"):
+            self.create_sign_env()
         XR_SIGN = "/sw/packages/jam_IOX/signing/xr_sign"
         SIGNING_CMD = "%s -plat %s -file %s/boot/initrd.img  -dir %s -signature %s/boot/signature.initrd.img"% \
             (XR_SIGN,self.platform, path, path, path)
-        if not os.path.exists(".ACMEROOT") :
-            os.makedirs(".ACMEROOT")
-        if not os.path.exists("tools") :
-            cmd = "tar -xvf %s"%(CER_TAR_FILE)
-            run_cmd(cmd)
         logger.info("\nenviron before signing is {}".format(os.environ))              
         result = run_cmd(SIGNING_CMD)                                                
         logger.info("\nOutput of {} is \n {}".format(SIGNING_CMD, result["output"]))        
@@ -2596,6 +2656,10 @@ def parsecli():
     parser.add_argument('-c', '--xrconfig', dest='xrConfig', type=str,
                         required=False, action='append',
                         help='Path to XR config file')
+
+    parser.add_argument('-z', '--ztp-ini', dest='ztp_ini', type=str,
+                        required=False, action='append',
+                        help='Path to user ztp ini file')
 
     parser.add_argument('-s', '--script', dest='script', type=str,
                         required=False, action='append',
@@ -2685,6 +2749,8 @@ def parsecli():
         sys.exit(-1)
     if not pargs.gisoInfo and not pargs.gisoLabel:
         pargs.gisoLabel = 0
+        logger.info('Info: Golden ISO label is not specified '
+                     'so defaulting to 0')
     elif not pargs.gisoInfo and len(pargs.gisoLabel) > 1:
         logger.error('Error: Multiple Golden ISO labels are given.')
         logger.error('Info : Please provide unique Golden ISO label.')
@@ -2778,6 +2844,14 @@ def main(argv):
             logger.info("\nXR-Config file (%s) will be encapsulated in Golden ISO." % 
                         (os.path.abspath(argv.xrConfig[0])))
             giso.set_xrconfig(argv.xrConfig[0])
+
+        #
+        # Check for custom ztp.ini file.
+        #
+        if argv.ztp_ini and os.path.isfile(argv.ztp_ini[0]):
+            logger.info ("Custom ZTP ini file (%s) will be encapsulated in Golden ISO." %
+                        (os.path.abspath(argv.ztp_ini[0])))
+            giso.set_ztpini(argv.ztp_ini[0])
 
         rpm_db = Rpmdb()
         fs_root = giso.get_bundle_iso_extract_path() 
