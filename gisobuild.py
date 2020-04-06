@@ -2553,7 +2553,7 @@ class Giso:
         """ Pretend to be in workspace as thats a requirement for signing and
             get platforms .cer and .der files
         """
-        logger.debug("Creating signing environment...")
+        logger.info("\nCreating signing environment...\n")
         logger.debug("ISO path: %s" %(self.bundle_iso.get_iso_path()))
         plat = self.get_bundle_iso_platform_name()
         if plat in Giso.NESTED_ISO_PLATFORMS :
@@ -2575,6 +2575,9 @@ class Giso:
         os.chdir(pwd) 
         devline = result["output"].rstrip("\n")
         logger.debug("Devline: %s" %devline)
+        if not devline:
+            logger.error("Error: Couldn't get the lineup info from the image: %s" % self.bundle_iso.get_iso_path())
+            sys.exit(-1)
         cmd = "acme dp -devline %s | grep tools/code-sign > my_lineup_file.lu" %devline
         result = run_cmd(cmd)
         pwd=os.getcwd()
