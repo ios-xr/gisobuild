@@ -26,7 +26,7 @@ import commands
 import stat
 import pprint
 
-__version__ = '0.14'
+__version__ = '0.15'
 GISO_PKG_FMT_VER = 1.0
 
 try:
@@ -2575,6 +2575,20 @@ class Giso:
         os.chdir(pwd) 
         devline = result["output"].rstrip("\n")
         logger.debug("Devline: %s" %devline)
+
+        if not devline:
+            logger.debug("platform: %s" %plat)
+            if plat == "asr9k":
+                logger.debug("This might  be shrinked asr9k image tryin with different  path")
+                cmd = "isoinfo -i %s -R -x /boot/initrd.img | gunzip -c | " \
+                  "cpio -i --to-stdout --quiet files*.cpio | " \
+                  "cpio -i --to-stdout --quiet  etc/show_version.txt | " \
+                  "grep \"Lineup =\" | cut -d ' ' -f3" \
+                   %(self.bundle_iso.get_iso_path())
+                result = run_cmd(cmd)
+                devline = result["output"].rstrip("\n")
+                logger.debug("Devline for shrinked a9k image: %s" %devline)
+
         if not devline:
             logger.error("Error: Couldn't get the lineup info from the image: %s" % self.bundle_iso.get_iso_path())
             sys.exit(-1)
