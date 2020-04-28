@@ -26,7 +26,7 @@ import commands
 import stat
 import pprint
 
-__version__ = '0.15'
+__version__ = '0.16'
 GISO_PKG_FMT_VER = 1.0
 
 try:
@@ -329,11 +329,10 @@ class Rpm:
                  or SYSADMIN_SUBSTRING in self.group.upper()))
 
     def is_tp_rpm(self, platform):
-        if self.xrrelease.strip() == "(none)":
-            return False
-        else : 
-            # All TP SMUs will have xrrelease 
+        if not self.is_cisco_rpm (platform):
             return True
+        else:
+            return False
 
     def is_spiritboot(self):
         return ((SPIRIT_BOOT_SUBSTRING in self.name) and 
