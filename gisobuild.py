@@ -26,7 +26,7 @@ import commands
 import stat
 import pprint
 
-__version__ = '0.16'
+__version__ = '0.17'
 GISO_PKG_FMT_VER = 1.0
 
 try:
@@ -1903,7 +1903,7 @@ class Giso:
 
         giso_pkg_fmt_ver = GISO_PKG_FMT_VER
         name = giso_name_string
-        version = '%s.%s' % (iso.get_iso_version(), self.giso_ver_label)
+        version = '%s-%s' % (iso.get_iso_version(), self.giso_ver_label)
         built_by = getpass.getuser()
         built_on = datetime.now().strftime("%a %b %d %H:%M:%S")
         built_host = socket.gethostname()
