@@ -4,10 +4,11 @@
 #
 # utility to build golden iso
 #
-# Copyright (c) 2015-2019 by Cisco Systems, Inc.
+# Copyright (c) 2015-2020 by Cisco Systems, Inc.
 # All rights reserved.
 # =============================================================================
 from datetime import datetime
+import subprocess
 import argparse
 import functools
 import getpass
@@ -17,16 +18,14 @@ import os
 import re
 import shutil 
 import socket
-import subprocess
 import sys
 import tempfile
 import yaml
 import string
-import commands
 import stat
 import pprint
 
-__version__ = '0.17'
+__version__ = '0.18'
 GISO_PKG_FMT_VER = 1.0
 
 try:
@@ -63,8 +62,16 @@ def run_cmd(cmd):
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, 
                                stderr=subprocess.PIPE, shell=True)
     out, error = process.communicate()
+    try:
+        out = out.decode('utf8')
+    except:
+        pass
     sprc = process.returncode
     if sprc is None or sprc != 0:
+        try:
+           error = error.decode('utf8')
+        except:
+           pass
         out = error
         raise RuntimeError("Error CMD=%s returned --->%s" % (cmd, out))
     return dict(rc=sprc, output=out)
@@ -137,7 +144,7 @@ class Migtar:
         dst_system_image=os.path.basename(input_image)
 
         # Get Destination tar file name and check if this exists.
-        self.dst_system_tar = dst_system_image.replace(".iso","-migrate_to_eXR.tar");
+        self.dst_system_tar = dst_system_image.replace(".iso","-migrate_to_eXR.tar")
 
         if os.path.exists(self.dst_system_tar):
             logger.debug("Removing old tar file %s " % self.dst_system_tar)
@@ -163,7 +170,7 @@ class Migtar:
 
         #check if Boot Directory exists
         if not os.path.exists(TMP_INITRD):
-            logger.error("Failed to extract initrd(%s) from ISO" 
+            logger.error("Failed to extract initrd(%s) from ISO %s" 
                          % (self.BOOT_INITRD, input_image))
             logger.info("Please make sure at least 1.5 GB of space is availble in /tmp/")
             sys.exit(-1)
@@ -306,11 +313,11 @@ class Rpm:
         #
         result_str_list = result["output"].split("\n")
         requires_list = []
-        map(lambda x: requires_list.append(x),
-            filter(lambda y: not y.startswith('/'), result_str_list))
+        list(map(lambda x: requires_list.append(x),
+            [y for y in result_str_list if not y.startswith('/')]))
 
         self.requires = requires_list
-        map(lambda x: logger.debug("%s:%s" % x), vars(self).items())
+        list(map(lambda x: logger.debug("%s:%s" % x), list(vars(self).items())))
          
     #
     # RPM is Hostos RPM if rpm name has hostos keyword and platform name.
@@ -344,7 +351,7 @@ class Rpm:
 class Rpmdb:
     def __init__(self):
         self.bundle_iso = Iso()
-        self.repo_path = None
+        self.repo_path = []
         self.rpm_list = []
         self.csc_rpm_list = []
         self.tp_rpm_list = []
@@ -375,19 +382,22 @@ class Rpmdb:
         self.is_full_iso_require = False
         self.is_skip_dep_check = False
 
-    def populate_rpmdb(self, fs_root, repo, platform, iso_version, full_iso, eRepo):
+    def populate_rpmdb(self, fs_root, repo_paths, platform, iso_version, full_iso, eRepo):
         retval = 0
-        if not (repo and fs_root):
+        repo_files = []
+        if not (repo_paths and fs_root):
             logger.error('Invalid arguments')
             return -1
-        logger.info("\nScanning repository [%s]...\n" % (os.path.abspath(repo)))
-        repo_files = glob.glob(repo+"/*")
+        for repo in repo_paths:
+            logger.info("\nScanning repository [%s]...\n" % (os.path.abspath(repo)))
+            repo_files += glob.glob(repo+"/*")
+            if not len(repo_files):
+                logger.info('RPM repository directory \'%s\' is empty!!' % repo)
         if not len(repo_files):
-            logger.info('RPM repository directory \'%s\' is empty!!' % repo)
             return 0 
         # if it is gISO extend look at eRepo as well.
         if eRepo is not None:
-           repo_files += glob.glob(eRepo+"/*")
+            repo_files += glob.glob(eRepo+"/*")
         rpm_name_version_release_arch_list = []
         if full_iso:
             self.is_full_iso_require = True
@@ -424,11 +434,11 @@ class Rpmdb:
 
         if self.sp_names:
             logger.info("\nFollowing are the valid Service pack present in the repository path provided in CLI\n")
-            map(lambda file_name: logger.info("\t(+) %s" % os.path.basename(file_name)), self.sp_names)
+            list(map(lambda file_name: logger.info("\t(+) %s" % os.path.basename(file_name)), self.sp_names))
 
         if self.sp_name_invalid:
             logger.info("\nSkipping following invalid Service pack from the repository path\n")
-            map(lambda file_name: logger.info("\t(-) %s" % os.path.basename(file_name)), self.sp_name_invalid)
+            list(map(lambda file_name: logger.info("\t(-) %s" % os.path.basename(file_name)), self.sp_name_invalid))
 
         try:
             self.process_sp()    
@@ -436,7 +446,7 @@ class Rpmdb:
             self.cleanup_tmp_sp_data()
             
         logger.info("\nTotal %s RPM(s) present in the repository path provided in CLI" % (len(self.rpm_list)))
-        self.repo_path = repo
+        self.repo_path = repo_paths
        
         return 0
 
@@ -485,13 +495,13 @@ class Rpmdb:
 
         if len(self.vm_sp_rpm_file_paths[HOST_SUBSTRING]) != 0:
             logger.info("\nFollowing are the host rpms in service pack:\n")
-            map(lambda file_name: logger.info("\t(*) %s" % os.path.basename(file_name)), self.vm_sp_rpm_file_paths[HOST_SUBSTRING])
+            list(map(lambda file_name: logger.info("\t(*) %s" % os.path.basename(file_name)), self.vm_sp_rpm_file_paths[HOST_SUBSTRING]))
         if len(self.vm_sp_rpm_file_paths[CALVADOS_SUBSTRING]) != 0:
             logger.info("\nFollowing are the cavados rpms in service pack:\n")
-            map(lambda file_name: logger.info("\t(*) %s" % os.path.basename(file_name)), self.vm_sp_rpm_file_paths[CALVADOS_SUBSTRING])
+            list(map(lambda file_name: logger.info("\t(*) %s" % os.path.basename(file_name)), self.vm_sp_rpm_file_paths[CALVADOS_SUBSTRING]))
         if len(self.vm_sp_rpm_file_paths[XR_SUBSTRING]) != 0:
             logger.info("\nFollowing are the xr rpms in service pack:\n")
-            map(lambda file_name: logger.info("\t(*) %s" % os.path.basename(file_name)), self.vm_sp_rpm_file_paths[XR_SUBSTRING])
+            list(map(lambda file_name: logger.info("\t(*) %s" % os.path.basename(file_name)), self.vm_sp_rpm_file_paths[XR_SUBSTRING]))
 
         return 0
 
@@ -544,8 +554,8 @@ class Rpmdb:
             logger.info("Skipped %s RPMS not matching version %s"
                         % (len(version_missmatch_rpms), release))
         logger.debug('Found %s Cisco RPMs' % self.csc_rpm_count)
-        map(lambda rpm_inst: logger.debug("\t\t%s" % rpm_inst.file_name),
-            self.csc_rpm_list)
+        list(map(lambda rpm_inst: logger.debug("\t\t%s" % rpm_inst.file_name),
+            self.csc_rpm_list))
 
         # filter TP SMUs based on XR release
         version_missmatch_tp_rpms = set()
@@ -560,8 +570,8 @@ class Rpmdb:
             logger.info("Skipped %s TP RPMS not matching version %s"
                         % (len(version_missmatch_tp_rpms), release))
         logger.debug('Found %s TP RPMs' % self.tp_rpm_count)
-        map(lambda rpm_inst: logger.debug("\t\t%s" % rpm_inst.file_name),
-            self.tp_rpm_list)
+        list(map(lambda rpm_inst: logger.debug("\t\t%s" % rpm_inst.file_name),
+            self.tp_rpm_list))
     #
     # Filter and discard Cisco rpms not matching platform of mini ISO.
     #
@@ -579,8 +589,8 @@ class Rpmdb:
             logger.info("Skipped %s RPMS not matching platform %s"
                         % (len(platform_missmatch_rpms), platform))
         logger.debug('Found %s Cisco RPMs' % self.csc_rpm_count)
-        map(lambda rpm_inst: logger.debug("\t\t%s" % rpm_inst.file_name),
-            self.csc_rpm_list)
+        list(map(lambda rpm_inst: logger.debug("\t\t%s" % rpm_inst.file_name),
+            self.csc_rpm_list))
         
         # filter TP SMUs based on platform
         platform_missmatch_tp_rpms = set()
@@ -596,8 +606,8 @@ class Rpmdb:
             logger.info("Skipped %s TP RPMS not matching platform %s"
                         % (len(platform_missmatch_tp_rpms), platform))
         logger.debug('Found %s TP RPMs' % self.csc_rpm_count)
-        map(lambda rpm_inst: logger.debug("\t\t%s" % rpm_inst.file_name),
-            self.csc_rpm_list)
+        list(map(lambda rpm_inst: logger.debug("\t\t%s" % rpm_inst.file_name),
+            self.csc_rpm_list))
         
 
     #
@@ -684,7 +694,7 @@ class Rpmdb:
                     i_rpm_arch = mre.groups()[3]
                     if i_rpm_name == s_rpm_name:
                         base_rpm_arch = \
-                            self.sdk_rpm_mdata[platform][vm][sdk_arch][s_rpm_name].keys()[0]
+                            list(self.sdk_rpm_mdata[platform][vm][sdk_arch][s_rpm_name].keys())[0]
 
                         # same rpm name and same vm type may have
                         # multiple rpm having different arch 
@@ -746,16 +756,16 @@ class Rpmdb:
 
         if len(duplicate_tp_host_rpm) != 0:
             logger.error("\nFollowing are the duplicate host tp smus:\n")
-            map(lambda rpm_inst: logger.info("\t(*) %s" % rpm_inst.file_name), 
-                duplicate_tp_host_rpm)
+            list(map(lambda rpm_inst: logger.info("\t(*) %s" % rpm_inst.file_name), 
+                duplicate_tp_host_rpm))
         if len(duplicate_tp_admin_rpm) != 0:
             logger.error("\nFollowing are the duplicate admin tp smus:\n")
-            map(lambda rpm_inst: logger.info("\t(*) %s" % rpm_inst.file_name), 
-                duplicate_tp_admin_rpm)
+            list(map(lambda rpm_inst: logger.info("\t(*) %s" % rpm_inst.file_name), 
+                duplicate_tp_admin_rpm))
         if len(duplicate_tp_xr_rpm) != 0:
             logger.error("\nFollowing are the duplicate xr tp smus:\n")
-            map(lambda rpm_inst: logger.info("\t(*) %s" % rpm_inst.file_name), 
-                duplicate_tp_xr_rpm)
+            list(map(lambda rpm_inst: logger.info("\t(*) %s" % rpm_inst.file_name), 
+                duplicate_tp_xr_rpm))
 
         if (len(duplicate_tp_host_rpm) != 0 or len(duplicate_tp_admin_rpm) != 0  
             or len(duplicate_tp_xr_rpm) != 0):
@@ -829,22 +839,22 @@ class Rpmdb:
             logger.info("\nBase rpm(s) of following %s Thirdparty Host SMU(s) "
                         "is/are not present in the repository.\n" % 
                         len(invalid_tp_host_rpm)) 
-            map(lambda rpm_inst: logger.info("\t-->%s" % rpm_inst.file_name), 
-                invalid_tp_host_rpm)
+            list(map(lambda rpm_inst: logger.info("\t-->%s" % rpm_inst.file_name), 
+                invalid_tp_host_rpm))
             rc = -1
         if len(invalid_tp_admin_rpm):
             logger.info("\nBase rpm(s) of following %d Thirdparty Sysadmin SMU(s) "
                         "is/are not present in the repository.\n" % 
                         len(invalid_tp_admin_rpm)) 
-            map(lambda rpm_inst: logger.info("\t-->%s" % rpm_inst.file_name), 
-                invalid_tp_admin_rpm)
+            list(map(lambda rpm_inst: logger.info("\t-->%s" % rpm_inst.file_name), 
+                invalid_tp_admin_rpm))
             rc = -1
         if len(invalid_tp_xr_rpm):
             logger.info("\nBase rpm(s) of following %d Thirdparty Xr SMU(s) "
                         "is/are not present in the repository.\n" % 
                         len(invalid_tp_xr_rpm)) 
-            map(lambda rpm_inst: logger.info("\t-->%s" % rpm_inst.file_name), 
-                invalid_tp_xr_rpm)
+            list(map(lambda rpm_inst: logger.info("\t-->%s" % rpm_inst.file_name), 
+                invalid_tp_xr_rpm))
             rc = -1
 
         if rc != 0:
@@ -869,23 +879,21 @@ class Rpmdb:
             logger.info("Skipping following %s Thirdparty RPM(s) not supported\n" 
                         "for release %s:\n" % 
                         (len(invalid_tp_rpm_list), iso_version))
-            map(lambda rpm_inst: logger.info("\t\t(-) %s" % rpm_inst.file_name), 
-                invalid_tp_rpm_list)
+            list(map(lambda rpm_inst: logger.info("\t\t(-) %s" % rpm_inst.file_name), 
+                invalid_tp_rpm_list))
             logger.info("If any of the above %s RPM(s) needed for Golden ISO then\n"
                         "provide RPM(s) supported for release %s" % 
                         (len(invalid_tp_rpm_list), iso_version))
 
         logger.debug('Found %s TP RPMs' % self.tp_rpm_count)
-        map(lambda rpm_inst: logger.debug("\t\t%s" % rpm_inst.file_name), 
-            self.tp_rpm_list)
+        list(map(lambda rpm_inst: logger.debug("\t\t%s" % rpm_inst.file_name), 
+            self.tp_rpm_list))
 
     def filter_hostos_spirit_boot_base_rpms(self, platform):
-        all_hostos_base_rpms = filter(lambda x: x.is_hostos_rpm(platform) and
-                                      x.package_type.upper() != SMU_SUBSTRING,
-                                      self.csc_rpm_list)
-        all_spirit_boot_base_rpms = filter(lambda x: x.is_spiritboot() and 
-                                           x.package_type.upper() != SMU_SUBSTRING,
-                                           self.csc_rpm_list)
+        all_hostos_base_rpms = [x for x in self.csc_rpm_list if x.is_hostos_rpm(platform) and
+                                x.package_type.upper() != SMU_SUBSTRING]
+        all_spirit_boot_base_rpms = [x for x in self.csc_rpm_list if x.is_spiritboot() and 
+                                     x.package_type.upper() != SMU_SUBSTRING]
 
         if len(all_hostos_base_rpms):
             logger.info("\nSkipping following host os base rpm(s) "
@@ -893,16 +901,16 @@ class Rpmdb:
             for rpm in all_hostos_base_rpms:    
                 logger.info("\t(-) %s" % rpm.file_name)
 
-        map(self.csc_rpm_list.remove, all_hostos_base_rpms)
-        map(self.rpm_list.remove, all_hostos_base_rpms)
+        list(map(self.csc_rpm_list.remove, all_hostos_base_rpms))
+        list(map(self.rpm_list.remove, all_hostos_base_rpms))
 
         if len(all_spirit_boot_base_rpms):
             logger.info("\nSkipping following spirit-boot base rpm(s) "
                         "from repository:\n")
             for rpm in all_spirit_boot_base_rpms:    
                 logger.info("\t(-) %s" % rpm.file_name)
-        map(self.csc_rpm_list.remove, all_spirit_boot_base_rpms)
-        map(self.rpm_list.remove, all_spirit_boot_base_rpms)
+        list(map(self.csc_rpm_list.remove, all_spirit_boot_base_rpms))
+        list(map(self.rpm_list.remove, all_spirit_boot_base_rpms))
 
     def _iter_rpm_subfields(self, field):
         """Yield subfields as 2-tuples that sort in the desired order
@@ -957,7 +965,7 @@ class Rpmdb:
             count = count + 1
             logger.info("[%2d] %s "%(count,pkg.file_name))
             key = "%s.%s.%s.%s"%(pkg.name, pkg.package_type, pkg.arch, pkg.vm_type)
-            if latest_smu.has_key(key):
+            if key in latest_smu:
                 p_v = latest_smu[key].version
                 p_r = latest_smu[key].release
                 t_v = pkg.version
@@ -971,7 +979,7 @@ class Rpmdb:
             count = count + 1
             logger.info("[%2d] %s "%(count,pkg.file_name))
 
-        self.csc_rpm_list = [ latest_smu[key] for key in latest_smu.keys() ]
+        self.csc_rpm_list = [ latest_smu[key] for key in list(latest_smu.keys()) ]
 
 
     def validate_associate_hostos_rpms(self, all_hostos_rpms):
@@ -1010,8 +1018,8 @@ class Rpmdb:
     def rpm_version_string_cmp(rpm1, rpm2):
         if (not rpm1) and (not rpm2):
             return 0
-        ilist1 = map(int, rpm1.version.split('.'))
-        ilist2 = map(int, rpm2.version.split('.'))
+        ilist1 = list(map(int, rpm1.version.split('.')))
+        ilist2 = list(map(int, rpm2.version.split('.')))
         if ilist1 > ilist2:
             return -1
         elif ilist1 < ilist2:
@@ -1022,10 +1030,8 @@ class Rpmdb:
     def filter_multiple_hostos_spirit_boot_rpms(self, platform):
         self.filter_hostos_spirit_boot_base_rpms(platform)
 
-        all_hostos_rpms = filter(lambda x: x.is_hostos_rpm(platform), 
-                                 self.csc_rpm_list)
-        all_spirit_boot_rpms = filter(lambda x: x.is_spiritboot(), 
-                                      self.csc_rpm_list)
+        all_hostos_rpms = [x for x in self.csc_rpm_list if x.is_hostos_rpm(platform)]
+        all_spirit_boot_rpms = [x for x in self.csc_rpm_list if x.is_spiritboot()]
 
         self.validate_associate_hostos_rpms(all_hostos_rpms)
  
@@ -1033,30 +1039,28 @@ class Rpmdb:
             sorted(all_hostos_rpms,   
                    key=functools.cmp_to_key(Rpmdb.rpm_version_string_cmp))
         discarded_hostos_rpms = \
-            filter(lambda x: sorted_hostos_rpms[0].version != x.version, 
-                   sorted_hostos_rpms)
+            [x for x in sorted_hostos_rpms if sorted_hostos_rpms[0].version != x.version]
 
         if len(discarded_hostos_rpms):
             logger.info("\nSkipping following older version of host os rpm(s) from repository:\n")
             for rpm in discarded_hostos_rpms:    
                 logger.info("\t(-) %s" % rpm.file_name)
 
-        map(self.csc_rpm_list.remove, discarded_hostos_rpms)
-        map(self.rpm_list.remove, discarded_hostos_rpms)
+        list(map(self.csc_rpm_list.remove, discarded_hostos_rpms))
+        list(map(self.rpm_list.remove, discarded_hostos_rpms))
 
         sorted_spiritboot = \
             sorted(all_spirit_boot_rpms,
                    key=functools.cmp_to_key(Rpmdb.rpm_version_string_cmp))
         discarded_spiritboot_rpms = \
-            filter(lambda x: sorted_spiritboot[0].version != x.version, 
-                   sorted_spiritboot)
+            [x for x in sorted_spiritboot if sorted_spiritboot[0].version != x.version]
 
         if len(discarded_spiritboot_rpms):
             logger.info("\nSkipping following older version of spirit-boot rpm(s) from repository:\n")
             for rpm in discarded_spiritboot_rpms:
                 logger.info("\t(-) %s" % rpm.file_name)
-        map(self.csc_rpm_list.remove, discarded_spiritboot_rpms)
-        map(self.rpm_list.remove, discarded_spiritboot_rpms)
+        list(map(self.csc_rpm_list.remove, discarded_spiritboot_rpms))
+        list(map(self.rpm_list.remove, discarded_spiritboot_rpms))
             
     #
     # Group Cisco rpms based on VM_type and Architecture
@@ -1065,7 +1069,7 @@ class Rpmdb:
     def group_cisco_rpms_by_vm_arch(self):
         for rpm in self.csc_rpm_list:
             arch_rpms = self.csc_rpms_by_vm_arch[rpm.vm_type.upper()]
-            if not (rpm.arch in arch_rpms.keys()):
+            if not (rpm.arch in list(arch_rpms.keys())):
                 arch_rpms[rpm.arch] = [rpm]
             else:
                 arch_rpms[rpm.arch].append(rpm)
@@ -1077,7 +1081,7 @@ class Rpmdb:
     def group_tp_rpms_by_vm_arch(self):
         for rpm in self.tp_rpm_list:
             arch_rpms = self.tp_rpms_by_vm_arch[rpm.vm_type.upper()]
-            if not (rpm.arch in arch_rpms.keys()):
+            if not (rpm.arch in list(arch_rpms.keys())):
                 arch_rpms[rpm.arch] = [rpm]
             else:
                 arch_rpms[rpm.arch].append(rpm)
@@ -1101,19 +1105,21 @@ class Rpmdb:
         return self.tp_rpm_count
 
     def get_abs_rpm_file_path(self, rpm):
-        return "%s/%s" % (self.repo_path, rpm.file_name)
+        for repo_path in self.repo_path:
+            if os.path.exists(repo_path+rpm.file_name):
+                return "%s/%s" % (repo_path, rpm.file_name)
 
     def get_tp_rpms_by_vm_arch(self, vm_type, arch):
-        if not (vm_type in self.tp_rpms_by_vm_arch.keys()):
+        if not (vm_type in list(self.tp_rpms_by_vm_arch.keys())):
             return []
-        if not (arch in self.tp_rpms_by_vm_arch[vm_type].keys()):
+        if not (arch in list(self.tp_rpms_by_vm_arch[vm_type].keys())):
             return []
         return self.tp_rpms_by_vm_arch[vm_type][arch]
 
     def get_cisco_rpms_by_vm_arch(self, vm_type, arch):
-        if not (vm_type in self.csc_rpms_by_vm_arch.keys()):
+        if not (vm_type in list(self.csc_rpms_by_vm_arch.keys())):
             return []
-        if not (arch in self.csc_rpms_by_vm_arch[vm_type].keys()):
+        if not (arch in list(self.csc_rpms_by_vm_arch[vm_type].keys())):
             return []
         return self.csc_rpms_by_vm_arch[vm_type][arch] 
 
@@ -1206,8 +1212,8 @@ def system_resource_check(args):
         logger.error("Error: This tool requires Python version 2.7 or higher.")
         sys.exit(-1)
         
-    if sys.version_info > (3, 0):
-        logger.error("Error: This tool does not work with python 3.x.")
+    if sys.version_info > (3, 6):
+        logger.error("Error: This tool does not work with python version greater than 3.x.")
         sys.exit(-1)
 
     disk = os.statvfs(cwd)
@@ -1229,7 +1235,7 @@ def system_resource_check(args):
         except Exception:
             exc_info = sys.exc_info()
             logger.debug("TB:", exc_info=True)
-            print ("\n", "Exception:", exc_info[0], exc_info[1])
+            print("\n", "Exception:", exc_info[0], exc_info[1])
             logger.error("\tError: Tool %s not found." % tool)
             rc = -1
             
@@ -1375,20 +1381,25 @@ class Iso(object):
 
     def do_compat_check(self, repo_path, input_rpms, iso_key, eRepo):
         rpm_file_list = ""
+        all_rpms = []
         if self.iso_extract_path is None:
             self.get_iso_extract_path()
         rpm_staging_dir = "%s/rpms/" % self.iso_extract_path
         os.mkdir(rpm_staging_dir)
         input_rpms_set = set(input_rpms)
-        iso_rpms_set = set(map(os.path.basename, self.iso_rpms))
+        iso_rpms_set = set(list(map(os.path.basename, self.iso_rpms)))
         logger.debug("ISO RPMS:")
-        map(logger.debug, iso_rpms_set)
+        list(map(logger.debug, iso_rpms_set))
 
         dup_input_rpms_set = input_rpms_set & iso_rpms_set
         # TBD Detect dup input rpms based on provides info of base iso pkgs
         input_rpms_unique = input_rpms_set - dup_input_rpms_set
-        all_rpms = map(lambda x: "%s/%s" % (repo_path, x), 
-                       input_rpms_unique) + self.iso_rpms
+        for rpath in repo_path:
+            for x in input_rpms_unique:
+                rpm_path = "%s/%s" % (rpath, x)
+                if os.path.exists(rpm_path):
+                   all_rpms.append(rpm_path)
+        all_rpms += self.iso_rpms
         all_rpms = list(set(all_rpms))
         try:
             for rpm in all_rpms:
@@ -1426,7 +1437,6 @@ class Iso(object):
                       logger.debug("%s key:%s doesn't match with iso image"%
                                         (os.path.basename(pkg), key))
                       PkgSigCheckList.append(os.path.basename(pkg))
-
             if PkgSigCheckList:
                logger.info("\nFollowing RPMs signature doesn't match with iso image\n")
                for pkg in PkgSigCheckList:
@@ -1564,7 +1574,7 @@ class Giso:
             if plat in Giso.NESTED_ISO_PLATFORMS :
                 # This was interim change for 651 release for fretta only
                 if "6.5.1." in self.bundle_iso.get_iso_version() or '6.5.1' == self.bundle_iso.get_iso_version():
-                    print self.bundle_iso.get_iso_version()
+                    print(self.bundle_iso.get_iso_version())
                     self.giso_rpm_path = SIGNED_651_NCS5500_RPM_PATH
                 else :
                     self.giso_rpm_path = SIGNED_NCS5500_RPM_PATH
@@ -1774,7 +1784,7 @@ class Giso:
                 % fs_root
             search_str = ''
             if os.path.exists(bootstrap_file):
-                for x in self.supp_archs.keys():
+                for x in list(self.supp_archs.keys()):
                     if "XR" in x:
                         search_str = "XR_SUPPORTED_ARCHS"
                     if "HOST" in x or "CALVADOS" in x:
@@ -1783,10 +1793,10 @@ class Giso:
                         result = run_cmd("grep %s %s" % (search_str, 
                                                          bootstrap_file))
                         self.supp_archs[x] = \
-                            map(lambda y: y.replace('\n', ''),
-                                result['output'].split('=')[1].split(','))
+                            list(map(lambda y: y.replace('\n', ''),
+                                result['output'].split('=')[1].split(',')))
                         logger.debug('vm_type %s Supp Archs: ' % x)
-                        map(lambda y: logger.debug("%s" % y), self.supp_archs[x])
+                        list(map(lambda y: logger.debug("%s" % y), self.supp_archs[x]))
                     except Exception as e:
                         logger.debug(str(e))
             else:
@@ -1794,7 +1804,7 @@ class Giso:
                              bootstrap_file)
                 
         logger.debug("Supp arch query for vm_type %s" % vm_type)
-        map(lambda y: logger.debug("%s" % y), self.supp_archs[vm_type])
+        list(map(lambda y: logger.debug("%s" % y), self.supp_archs[vm_type]))
         return self.supp_archs[vm_type]
 
     @staticmethod
@@ -1903,7 +1913,7 @@ class Giso:
 
         giso_pkg_fmt_ver = GISO_PKG_FMT_VER
         name = giso_name_string
-        version = '%s-%s' % (iso.get_iso_version(), self.giso_ver_label)
+        version = '%s.%s' % (iso.get_iso_version(), self.giso_ver_label)
         built_by = getpass.getuser()
         built_on = datetime.now().strftime("%a %b %d %H:%M:%S")
         built_host = socket.gethostname()
@@ -1917,7 +1927,7 @@ class Giso:
         file_yaml = "%s/%s"%(self.giso_dir, "iosxr_image_mdata.yml")        
         fd = open(file_yaml, 'r')
         mdata = {}
-        mdata = yaml.load(fd)
+        mdata = yaml.safe_load(fd)
         fd.close()
 
         with open("%s/%s" % (self.giso_dir, Giso.GISO_INFO_TXT), 'w') as f:
@@ -1996,15 +2006,15 @@ class Giso:
     def update_grub_cfg(self, iso):
         # update grub.cfg file with giso_boot parameter 
         lines = []
-        for file in iso.GRUB_FILES:
-            with open("%s/%s" % (self.giso_dir, file), 'r') as fd:
+        for grub_file in iso.GRUB_FILES:
+            with open("%s/%s" % (self.giso_dir, grub_file), 'r') as fd:
                 for line in fd:
                     if "root=" in line and "noissu" in line:
                         line = line.rstrip('\n') + " giso_boot\n"
                     lines.append(line)
 
             # write updated grub.cfg
-            with open("%s/%s" % (self.giso_dir, file), 'w') as fd:
+            with open("%s/%s" % (self.giso_dir, grub_file), 'w') as fd:
                 for line in lines:
                     fd.write(line)
 
@@ -2256,9 +2266,10 @@ class Giso:
                                 if duplicate_present:
                                     continue
                         rpm_count += 1
-                        if os.path.isfile(self.repo_path+'/'+rpm_file):
-                           repo=self.repo_path 
-                        else:
+                        for rpath in self.repo_path:
+                            if os.path.isfile(rpath+'/'+rpm_file):
+                               repo=rpath 
+                        if not repo:
                            repo=self.ExtendRpmRepository
                         shutil.copy('%s/%s' % (repo, rpm_file),
                                     giso_repo_path)
@@ -2270,13 +2281,13 @@ class Giso:
                 # TODO: Print duplicate
                 if vm_type == HOST_SUBSTRING and duplicate_host_rpms:
                     logger.debug("\nSkipped following duplicate host rpms from repo\n")
-                    map(lambda file_name: logger.debug("\t(-) %s" % file_name), duplicate_host_rpms)
+                    list(map(lambda file_name: logger.debug("\t(-) %s" % file_name), duplicate_host_rpms))
                 if vm_type == SYSADMIN_SUBSTRING and duplicate_calv_rpms:
                     logger.debug("\nSkipped following duplicate calvados rpm from repo\n")
-                    map(lambda file_name: logger.debug("\t(-) %s" % file_name), duplicate_calv_rpms)
+                    list(map(lambda file_name: logger.debug("\t(-) %s" % file_name), duplicate_calv_rpms))
                 if vm_type == XR_SUBSTRING and duplicate_xr_rpms:
                     logger.debug("\nSkipped following duplicate xr rpm from repo\n")
-                    map(lambda file_name: logger.debug("\t(-) %s" % file_name), duplicate_xr_rpms)
+                    list(map(lambda file_name: logger.debug("\t(-) %s" % file_name), duplicate_xr_rpms))
 
         if self.sp_info_path is not None:
             for vm_type in Giso.VM_TYPE:
@@ -2619,7 +2630,7 @@ class Giso:
             (XR_SIGN,self.platform, path, path, path)
         logger.info("\nenviron before signing is {}".format(os.environ))              
         result = run_cmd(SIGNING_CMD)                                                
-        logger.info("\nOutput of {} is \n {}".format(SIGNING_CMD, result["output"]))        
+        logger.info("\nOutput of {} is \n {}".format(SIGNING_CMD, result["output"]))
 
         # Update MD5SUM in gisobuild after initrd
         with open("%s/%s" % (path, Giso.ISO_INFO_FILE), 'r') as f:
@@ -2627,11 +2638,12 @@ class Giso:
 
         #iso_info_raw = iso_info_raw.replace(, giso_name_string)
         cmd = "md5sum %s/boot/initrd.img"%(path)
-        status,md5sum_of_initrd = commands.getstatusoutput(cmd)
+        result = run_cmd(cmd)
+        status = result["rc"]
         if not status :
-            md5sum_of_initrd = md5sum_of_initrd.split(" ")[0].strip()
+            md5sum_of_initrd = result["output"].split(" ")[0].strip()
         else :
-            raise RuntimeError("Error CMD=%s returned --->%s" % (cmd, md5sum_of_initrd))
+            raise RuntimeError("Error CMD=%s returned --->%s" % (cmd, result["output"]))
 
         iso_info_raw = iso_info_raw.replace(re.search(r'Initrd: initrd.img (.*)\n',
             iso_info_raw).group(1),md5sum_of_initrd)
@@ -2666,7 +2678,7 @@ def parsecli():
                                 required=True, action='append',
                                 help='Path to Mini.iso/Full.iso file')
     parser.add_argument('-r', '--repo', dest='rpmRepo', type=str,
-                        required=False, action='append',
+                        required=False, action='append', nargs='+',
                         help='Path to RPM repository')
 
     parser.add_argument('-c', '--xrconfig', dest='xrConfig', type=str,
@@ -2684,6 +2696,7 @@ def parsecli():
     parser.add_argument('-l', '--label', dest='gisoLabel', type=str,
                         required=False, action='append',
                         help='Golden ISO Label')
+
     parser.add_argument('-e', '--extend', dest='gisoExtend', 
                         action='store_true', required=False,
                         help='extend gISO by adding more rpms to existing gISO')
@@ -2754,9 +2767,11 @@ def parsecli():
         logger.error('Error: Multiple rpm repo paths are given.')
         logger.error('Info : Please provide unique rpm repo path.')
         sys.exit(-1)
-    elif not pargs.gisoInfo and not os.path.isdir(pargs.rpmRepo[0]):
-        logger.error('Error: RPM respotiry path %s not found' % pargs.rpmRepo[0])
-        sys.exit(-1)
+    elif not pargs.gisoInfo:
+        for repopath in pargs.rpmRepo[0]:
+            if not os.path.exists(repopath):
+               logger.error('Error: RPM respotiry path %s not found' % repopath)
+               sys.exit(-1)
     if not pargs.gisoInfo and not pargs.xrConfig and not pargs.script and not pargs.rpmRepo:
         logger.error('Info: Nothing to be done.')
         logger.error('Info: RPM repository path and/or XR configuration file or User Scripts')
@@ -2773,7 +2788,7 @@ def parsecli():
         sys.exit(-1)
     elif not pargs.gisoInfo and pargs.gisoLabel:
         temp_label = pargs.gisoLabel[0]
-        new_label = string.replace(temp_label, '_', '')
+        new_label = temp_label.replace('_', '')
         if not new_label.isalnum():
             logger.error('Error: label %s contains characters other than alphanumeric and underscore', pargs.gisoLabel[0])
             logger.error('Info : Non-alphanumeric characters except underscore are not allowed in GISO label ')
@@ -2790,12 +2805,13 @@ def parsecli():
 def print_giso_info(iso_file):
     ISOINFO="isoinfo"
     cmd = ("%s -i %s -R -x /giso_info.txt"%(ISOINFO,iso_file))
-    status,output = commands.getstatusoutput(cmd)
+    result = run_cmd(cmd)
+    status = result["rc"]
     if status :
-        logger.error("Command :%s failed with error :\n%s"%(cmd,output))
+        logger.error("Command :%s failed with error :\n%s"%(cmd, result["output"]))
         return -1
     else :
-        logger.info("\n%s\n" %(output))
+        logger.info("\n%s\n" %(result["output"]))
 
 def main(argv):
     with Giso() as giso:
@@ -2874,7 +2890,7 @@ def main(argv):
         if argv.rpmRepo:
 
             # 1.3.1 Scan repository and build RPM data base.
-            rpm_db.populate_rpmdb(fs_root, os.path.abspath(argv.rpmRepo[0]),
+            rpm_db.populate_rpmdb(fs_root, argv.rpmRepo[0],
                  giso.get_bundle_iso_platform_name(), 
                  giso.get_bundle_iso_version(),
                  giso.is_full_iso_require,
@@ -2897,7 +2913,6 @@ def main(argv):
             rpm_db.filter_multiple_hostos_spirit_boot_rpms(
                 giso.get_bundle_iso_platform_name())
 
-            #SKEWAT
             rpm_db.filter_superseded_rpms()
 
             # 1.3.7 Group RPMS by vm_type and card architecture 
@@ -2905,7 +2920,7 @@ def main(argv):
             #  "Xr":{Arch:[rpmlist]}} 
             rpm_db.group_cisco_rpms_by_vm_arch()
             rpm_db.group_tp_rpms_by_vm_arch()
-            giso.set_repo_path(os.path.abspath(rpm_db.repo_path))
+            giso.set_repo_path(rpm_db.repo_path)
 
             # 1.4
             # Nothing to do if there is no xrconfig nor 
@@ -2939,19 +2954,19 @@ def main(argv):
                 if arch == "arm" and argv.x86_only:
                     logger.info("\nSkipping arm rpms as given x86_only option")
                     continue
-                arch_rpm_files = map(lambda rpm: rpm.file_name,
+                arch_rpm_files = list(map(lambda rpm: rpm.file_name,
                                      rpm_db.get_cisco_rpms_by_vm_arch(vm_type, 
                                                                       arch) +
                                      rpm_db.get_tp_rpms_by_vm_arch(vm_type, 
-                                                                   arch))
+                                                                   arch)))
                 if arch_rpm_files:
                     if vm_type == CALVADOS_SUBSTRING:
                         vmtype = SYSADMIN_SUBSTRING
                     else:
                         vmtype = vm_type
                     logger.info("\nFollowing %s %s rpm(s) will be used for building Golden ISO:\n" % (vmtype, arch))
-                    map(lambda file_name: logger.info("\t(+) %s" % file_name), 
-                        arch_rpm_files)
+                    list(map(lambda file_name: logger.info("\t(+) %s" % file_name), 
+                        arch_rpm_files))
                     final_rpm_files += arch_rpm_files 
                     if Giso.get_rp_arch() != arch:
                         continue
@@ -2964,13 +2979,13 @@ def main(argv):
             # missing_arch_rpms = [[Arm rpm list][x86_54 rpm list]]
             missing = False
             missing_arch_rpms = rpm_db.get_missing_arch_rpm(vm_type, supp_arch)
-            for arch in missing_arch_rpms.keys():
+            for arch in list(missing_arch_rpms.keys()):
                 if arch == "arm" and argv.x86_only:
                     logger.debug("Skipping arm rpms in missing_arch_rpms check as given x86_only option")
                     continue
-                map(lambda x: logger.error("\tError: Missing %s.%s.rpm" % 
+                list(map(lambda x: logger.error("\tError: Missing %s.%s.rpm" % 
                                            (x, arch)),
-                    missing_arch_rpms[arch])
+                    missing_arch_rpms[arch]))
                 if len(missing_arch_rpms[arch]):
                     missing = True
             if missing:
@@ -2996,8 +3011,8 @@ def main(argv):
             if dup_rpm_files:    
                 logger.info("\nSkipping following rpms from repository "
                             "since they are already present in base ISO:\n")
-                map(lambda file_name: logger.error("\t(-) %s" % file_name), 
-                    dup_rpm_files)
+                list(map(lambda file_name: logger.error("\t(-) %s" % file_name), 
+                    dup_rpm_files))
                 final_rpm_files = list(set(final_rpm_files) - 
                                        set(dup_rpm_files))
                 # TBD Remove other arch rpms as well.
@@ -3005,7 +3020,7 @@ def main(argv):
             if final_rpm_files:
                 if dup_rpm_files:
                     logger.debug("\nFollowing updated %s rpm(s) will be used for building Golden ISO:\n" % vm_type)
-                    map(lambda x: logger.debug('\t(+) %s' % x), final_rpm_files)
+                    list(map(lambda x: logger.debug('\t(+) %s' % x), final_rpm_files))
                 giso.set_vm_rpm_file_paths(final_rpm_files, vm_type)
                 if not giso.is_full_iso_require: 
                     logger.info("\n\t...RPM compatibility check [PASS]")
@@ -3055,12 +3070,13 @@ def readiso(iso_file, out_dir):
 
     pwd = cwd
     cmd = ("%s -R -l -i %s "%(ISOINFO,iso_file))
-    status,output = commands.getstatusoutput(cmd)
+    result = run_cmd(cmd) 
+    status = result["rc"]
     if status :
-        logger.error("Command :%s failed with error :\n%s"%(cmd,output))
+        logger.error("Command :%s failed with error :\n%s"%(cmd, result["output"]))
         return -1
 
-    for line in output.splitlines():
+    for line in result["output"].splitlines():
         if not line :
             continue
         elif line.startswith("d"):
@@ -3119,7 +3135,7 @@ if __name__ == "__main__":
         logger.debug("Exiting with exception")
         exc_info1 = sys.exc_info()
         logger.debug("TB:", exc_info=True)
-        print ("\n", "Exception:", exc_info1[0], exc_info1[1])
+        print("\n", "Exception:", exc_info1[0], exc_info1[1])
         logger.info("Detail logs: %s" % logfile)
     except KeyboardInterrupt:
         logger.info("User interrupted\n")
