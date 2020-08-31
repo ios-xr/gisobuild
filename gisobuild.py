@@ -1212,10 +1212,6 @@ def system_resource_check(args):
         logger.error("Error: This tool requires Python version 2.7 or higher.")
         sys.exit(-1)
         
-    if sys.version_info > (3, 6):
-        logger.error("Error: This tool does not work with python version greater than 3.x.")
-        sys.exit(-1)
-
     disk = os.statvfs(cwd)
     total_avail_space = float(disk.f_bavail*disk.f_frsize)
     total_avail_space_gb = total_avail_space/1024/1024/1024
