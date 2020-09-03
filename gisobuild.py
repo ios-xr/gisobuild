@@ -25,7 +25,7 @@ import string
 import stat
 import pprint
 
-__version__ = '0.19'
+__version__ = '0.20'
 GISO_PKG_FMT_VER = 1.0
 
 try:
@@ -609,6 +609,30 @@ class Rpmdb:
         list(map(lambda rpm_inst: logger.debug("\t\t%s" % rpm_inst.file_name),
             self.csc_rpm_list))
         
+    #
+    # Filter and discard cnbng Cisco rpm if both bng and cnbng rpm present.
+    #
+    def filter_cnbng_rpm(self):
+        bng_rpms = set()
+        cnbng_rpms = set()
+
+        for rpm in self.csc_rpm_list:
+            if "asr9k-bng-x64" in rpm.name:
+                bng_rpms |= set([rpm])
+            elif "asr9k-cnbng-x64" in rpm.name:
+                cnbng_rpms |= set([rpm])
+        if len(bng_rpms) and len(cnbng_rpms):
+            self.csc_rpm_list = list(set(self.csc_rpm_list) - cnbng_rpms)
+            self.rpm_list = list(set(self.rpm_list) - cnbng_rpms)
+            self.csc_rpm_count = len(self.csc_rpm_list)
+
+            if cnbng_rpms:
+                logger.info("\nSkipped following RPM(s) due to conflict with bng-x64 rpms\n")
+                for rpm in cnbng_rpms:
+                    logger.info("\t(-) %s" % rpm.file_name)
+            logger.debug('Found updated %s Cisco RPMs' % self.csc_rpm_count)
+            list(map(lambda rpm_inst: logger.debug("\t\t%s" % rpm_inst.file_name),
+                 self.csc_rpm_list))
 
     #
     # Read the content from release-rpms-*.txt and prepare list for each domain.
@@ -2910,6 +2934,9 @@ def main(argv):
                 giso.get_bundle_iso_platform_name())
 
             rpm_db.filter_superseded_rpms()
+
+            #Filter and discard cnbng RPMs if bng and cnbng rpm coexist in repo
+            rpm_db.filter_cnbng_rpm()
 
             # 1.3.7 Group RPMS by vm_type and card architecture 
             # {"Host":{Arch:[rpm list]},"Cal":{Arch:[rpmlist]},
