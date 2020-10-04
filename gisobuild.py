@@ -25,7 +25,7 @@ import string
 import stat
 import pprint
 
-__version__ = '0.20'
+__version__ = '0.21'
 GISO_PKG_FMT_VER = 1.0
 
 try:
@@ -887,7 +887,7 @@ class Rpmdb:
                          "repository and retry")
             logger.info("\nGolden ISO build process Exited due to above reason") 
             sys.exit(-1)
-
+        
         self.check_all_tp_duplicate_smu(valid_tp_host_rpm, valid_tp_admin_rpm, 
                                         valid_tp_xr_rpm)
 
@@ -899,6 +899,14 @@ class Rpmdb:
         self.tp_rpm_count = len(self.tp_rpm_list)
         self.rpm_list = list(set(self.rpm_list) - invalid_tp_rpm_list)
 
+        superseded_tp_smu_list = self.filter_superseded_tp_smu(valid_tp_host_rpm,
+                                                               valid_tp_admin_rpm,
+                                                               valid_tp_xr_rpm)
+
+        self.tp_rpm_list = list(set(self.tp_rpm_list) - superseded_tp_smu_list)
+        self.tp_rpm_count = len(self.tp_rpm_list)
+        self.rpm_list = list(set(self.rpm_list) - superseded_tp_smu_list)
+
         if invalid_tp_rpm_list:
             logger.info("Skipping following %s Thirdparty RPM(s) not supported\n" 
                         "for release %s:\n" % 
@@ -909,9 +917,59 @@ class Rpmdb:
                         "provide RPM(s) supported for release %s" % 
                         (len(invalid_tp_rpm_list), iso_version))
 
+        if superseded_tp_smu_list:
+            logger.debug("Skipping following superseded Thirdparty SMU(s)\n")
+            list(map(lambda rpm_inst: logger.debug("\t\t%s" % rpm_inst.file_name),
+                superseded_tp_smu_list))
+
         logger.debug('Found %s TP RPMs' % self.tp_rpm_count)
         list(map(lambda rpm_inst: logger.debug("\t\t%s" % rpm_inst.file_name), 
             self.tp_rpm_list))
+
+    # Remove superseded tp smu present in the list
+    @staticmethod
+    def find_superseded_tp_smu(rpm_set):
+
+        superseded_tp_rpm_set = set()
+        highest_ver_seen_smu_dict = {}
+
+        # TP smus of same package get built with different version
+        # than previous one. running number will be incremeneted after .p[n]
+        # e.g cisco-klm-0.1.p1-r0.0.CSCvr59318.admin.x86_64.rpm
+        # cisco-klm-0.1.p2-r0.0.r663.CSCvv27341.admin.x86_64.rpm
+        for rpm in rpm_set:
+            if rpm.package_type.upper() == SMU_SUBSTRING:
+                smu_na = "%s-%s" % (rpm.name, rpm.arch)
+                if smu_na in highest_ver_seen_smu_dict:
+                    if highest_ver_seen_smu_dict[smu_na].version < rpm.version:
+                        superseded_tp_rpm_set.add(highest_ver_seen_smu_dict[smu_na])
+                        highest_ver_seen_smu_dict[smu_na] = rpm
+                    else:
+                        superseded_tp_rpm_set.add(rpm)
+                else:
+                    highest_ver_seen_smu_dict[smu_na] = rpm
+
+        return superseded_tp_rpm_set
+
+    # filter superseded tp smu present
+    def filter_superseded_tp_smu(self, host_rpm_set, admin_rpm_set, xr_rpm_set):
+        superseded_tp_host_rpm = set()
+        superseded_tp_admin_rpm = set()
+        superseded_tp_xr_rpm = set()
+        all_superseded_tp_rpm = set()
+
+        if host_rpm_set:
+            superseded_tp_host_rpm = Rpmdb.find_superseded_tp_smu(host_rpm_set)
+        if admin_rpm_set:
+            superseded_tp_admin_rpm = Rpmdb.find_superseded_tp_smu(admin_rpm_set)
+        if xr_rpm_set:
+            superseded_tp_xr_rpm = Rpmdb.find_superseded_tp_smu(xr_rpm_set)
+
+        all_superseded_tp_rpm = (superseded_tp_host_rpm |
+                                 superseded_tp_admin_rpm |
+                                 superseded_tp_xr_rpm)
+
+        return all_superseded_tp_rpm
 
     def filter_hostos_spirit_boot_base_rpms(self, platform):
         all_hostos_base_rpms = [x for x in self.csc_rpm_list if x.is_hostos_rpm(platform) and
