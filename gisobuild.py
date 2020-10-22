@@ -25,7 +25,7 @@ import string
 import stat
 import pprint
 
-__version__ = '0.21'
+__version__ = '0.22'
 GISO_PKG_FMT_VER = 1.0
 
 try:
@@ -1633,6 +1633,7 @@ class Giso:
         self.gisoExtendRpms = 0
         self.ExtendRpmRepository = None
         self.is_skip_dep_check = False
+        self.is_x86_only = False
 
         
     #
@@ -2553,6 +2554,11 @@ class Giso:
         os.chdir(extract_initrd_r71x)
         run_cmd("zcat -f %s | cpio -id" %(system_image_initrd)) 
         os.chdir(pwd)
+        if self.is_x86_only:
+            nbi_initrd_dir_path=("%s/nbi-initrd"% extract_initrd_r71x)
+            if os.path.isdir(nbi_initrd_dir_path):
+                logger.debug ("Deleting nbi-initrd as x86_only option is selected")
+                run_cmd("rm -rf %s" % (nbi_initrd_dir_path))
         rpms_path = glob.glob('%s/*_rpms' % extract_system_image_initrd_path)
         if len(rpms_path):
             # Move the RPMS to initrd content
@@ -2947,6 +2953,9 @@ def main(argv):
             logger.info("\nInfo: skipDepCheck option is provided so GISO will be generated without dep check")
             giso.is_skip_dep_check = True
             giso.is_full_iso_require = True
+
+        if argv.x86_only:
+            giso.is_x86_only = True
         #
         # 1.2 Scan for XR-Config file. 
         #
@@ -3109,7 +3118,17 @@ def main(argv):
                     logger.info("\n\t...RPM compatibility check [SKIPPED]")
 
         if argv.gisoLabel: 
-            giso.set_giso_ver_label(argv.gisoLabel[0])
+            # if -x option is selected for fixed chassis fretta(ncs5500) then
+            # Label field will be appended with "_Fixed" to distinguish GISO is
+            # intended for only fixed chassis and shouldn't be used in modular
+            if argv.gisoLabel[0] == "0" and argv.x86_only:
+                label="0_Fixed"
+                giso.set_giso_ver_label(label)
+            elif argv.x86_only:
+               argv.gisoLabel[0] = "%s_Fixed" %(argv.gisoLabel[0])
+               giso.set_giso_ver_label(argv.gisoLabel[0])
+            else:
+               giso.set_giso_ver_label(argv.gisoLabel[0])
 
 
 #
