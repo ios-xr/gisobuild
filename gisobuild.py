@@ -25,7 +25,7 @@ import string
 import stat
 import pprint
 
-__version__ = '0.22'
+__version__ = '0.23'
 GISO_PKG_FMT_VER = 1.0
 
 try:
@@ -3121,14 +3121,17 @@ def main(argv):
             # if -x option is selected for fixed chassis fretta(ncs5500) then
             # Label field will be appended with "_Fixed" to distinguish GISO is
             # intended for only fixed chassis and shouldn't be used in modular
-            if argv.gisoLabel[0] == "0" and argv.x86_only:
-                label="0_Fixed"
-                giso.set_giso_ver_label(label)
-            elif argv.x86_only:
+            if argv.x86_only:
                argv.gisoLabel[0] = "%s_Fixed" %(argv.gisoLabel[0])
                giso.set_giso_ver_label(argv.gisoLabel[0])
             else:
                giso.set_giso_ver_label(argv.gisoLabel[0])
+            #if no label is provided then 0 would be default label. if -x is given
+            #without any label then 0_Fixed would be the label
+        else:
+            if argv.x86_only:
+                label="0_Fixed"
+                giso.set_giso_ver_label(label)
 
 
 #
@@ -3219,6 +3222,7 @@ if __name__ == "__main__":
     logger.addHandler(fh)
     logger.addHandler(ch)
     logger.debug("##############START#####################")
+    logger.debug("Tool version is %s" %(__version__))
     try:
         args = parsecli()
         logger.debug("Argument passed to %s : %s" %(sys.argv[0], args))
