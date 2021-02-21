@@ -605,9 +605,9 @@ class Rpmdb:
         if platform_missmatch_tp_rpms:
             logger.info("Skipped %s TP RPMS not matching platform %s"
                         % (len(platform_missmatch_tp_rpms), platform))
-        logger.debug('Found %s TP RPMs' % self.csc_rpm_count)
+        logger.debug('Found %s TP RPMs' % self.tp_rpm_count)
         list(map(lambda rpm_inst: logger.debug("\t\t%s" % rpm_inst.file_name),
-            self.csc_rpm_list))
+            self.tp_rpm_list))
         
     #
     # Filter and discard cnbng Cisco rpm if both bng and cnbng rpm present.
