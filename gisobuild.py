@@ -25,7 +25,7 @@ import string
 import stat
 import pprint
 
-__version__ = '0.23'
+__version__ = '0.24'
 GISO_PKG_FMT_VER = 1.0
 
 try:
@@ -2600,7 +2600,8 @@ class Giso:
         os.chdir(pwd)
         # Cleanup
         shutil.rmtree(extract_initrd_r71x)
-        shutil.rmtree(extract_system_image_initrd_path)
+        # ignore_errors=True is added to skip "Directory not empty" error
+        shutil.rmtree(extract_system_image_initrd_path, ignore_errors=True)
         shutil.rmtree(new_initrd_path)
 
     def recreate_initrd_non_nested_platform(self):
