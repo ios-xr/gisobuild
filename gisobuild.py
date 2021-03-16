@@ -25,7 +25,7 @@ import string
 import stat
 import pprint
 
-__version__ = '0.24'
+__version__ = '0.25'
 GISO_PKG_FMT_VER = 1.0
 
 try:
@@ -1481,6 +1481,11 @@ class Iso(object):
         all_rpms = list(set(all_rpms))
         try:
             for rpm in all_rpms:
+              # In 712 and some otehr release base rpm version part of smu is 
+              # lower version than base rpm in initrd. Due to this GISO build compatibility 
+              # check failed. So skipping base rpm from compatibility check
+              if global_platform_name not in rpm and not re.search('CSC[a-z][a-z]\d{5}', rpm):
+                  continue
               if os.path.isfile(rpm):
                 shutil.copy(rpm, rpm_staging_dir)
                 rpm_file_list = "%s/rpms/%s  " % (rpm_file_list,
@@ -2711,8 +2716,13 @@ class Giso:
         if not os.path.exists("tools") or not os.path.exists(".ACMEROOT"):
             self.create_sign_env()
         XR_SIGN = "/sw/packages/jam_IOX/signing/xr_sign"
-        SIGNING_CMD = "%s -plat %s -file %s/boot/initrd.img  -dir %s -signature %s/boot/signature.initrd.img"% \
-            (XR_SIGN,self.platform, path, path, path)
+        # ncs1004 is signed with ncs1k key
+        if self.platform == "ncs1004":
+            SIGNING_CMD = "%s -plat %s -file %s/boot/initrd.img  -dir %s -signature %s/boot/signature.initrd.img"% \
+                (XR_SIGN,"ncs1k", path, path, path)
+        else:
+            SIGNING_CMD = "%s -plat %s -file %s/boot/initrd.img  -dir %s -signature %s/boot/signature.initrd.img"% \
+                (XR_SIGN,self.platform, path, path, path)
         logger.info("\nenviron before signing is {}".format(os.environ))              
         result = run_cmd(SIGNING_CMD)                                                
         logger.info("\nOutput of {} is \n {}".format(SIGNING_CMD, result["output"]))
