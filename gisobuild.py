@@ -25,7 +25,7 @@ import string
 import stat
 import pprint
 
-__version__ = '0.25'
+__version__ = '0.26'
 GISO_PKG_FMT_VER = 1.0
 
 try:
@@ -683,6 +683,10 @@ class Rpmdb:
                                     if s_rpm_name not in \
                                        self.sdk_rpm_mdata[platform_key][vm][sdk_arch]:
                                         self.sdk_rpm_mdata[platform_key][vm][sdk_arch][s_rpm_name] = {}
+                                    # if release file have multiple base rpm for a package,
+                                    # read first available  instance
+                                    else:
+                                        continue
 
                                     if s_rpm_arch not in \
                                        self.sdk_rpm_mdata[platform_key][vm][sdk_arch][s_rpm_name]:
@@ -742,6 +746,21 @@ class Rpmdb:
                             if base_rpm_filename == rpm.file_name:
                                 return rpm   
         if not base_rpm_filename:
+            for rpm in self.tp_rpm_list:
+                if rpm.vm_type.upper() == CALVADOS_SUBSTRING:
+                    vmstr="admin"
+                else:
+                    vmstr=rpm.vm_type
+                if (rpm.file_name.find("CSC") == -1) :
+                    if i_rpm_arch != rpm.arch:
+                        continue
+                    if vm != vmstr.upper():
+                        continue
+                    if i_rpm_name ==  rpm.name:
+                        logger.debug("Base rpm was calculated without thirdparty list\n")
+                        return rpm
+                    else:
+                        logger.debug("Didn't find base rpm\n")
             return None 
 
     # Find for any duplicate tp smu present in repo
