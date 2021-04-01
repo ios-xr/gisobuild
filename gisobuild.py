@@ -4,7 +4,7 @@
 #
 # utility to build golden iso
 #
-# Copyright (c) 2015-2020 by Cisco Systems, Inc.
+# Copyright (c) 2015-2021 by Cisco Systems, Inc.
 # All rights reserved.
 # =============================================================================
 from datetime import datetime
@@ -25,7 +25,7 @@ import string
 import stat
 import pprint
 
-__version__ = '0.26'
+__version__ = '0.27'
 GISO_PKG_FMT_VER = 1.0
 
 try:
@@ -349,6 +349,9 @@ class Rpm:
 
 
 class Rpmdb:
+
+    tmp_smu_tar_extract_path = ""
+
     def __init__(self):
         self.bundle_iso = Iso()
         self.repo_path = []
@@ -381,18 +384,219 @@ class Rpmdb:
         self.vm_sp_rpm_file_paths = {"XR": None, "CALVADOS": None, "HOST": None}
         self.is_full_iso_require = False
         self.is_skip_dep_check = False
+        self.tmp_smu_repo_path = []
 
-    def populate_rpmdb(self, fs_root, repo_paths, platform, iso_version, full_iso, eRepo):
+    @staticmethod
+    def get_pre_req_opt_rpm(repo_paths, pkg):
+        pre_req_rpms = []
+        pre_req_rpm_list = []
+
+        if "asr9k-bng-" in pkg or "asr9k-cnbng" in pkg:
+            for repo_path in repo_paths:
+                pre_req_rpm=("%s/%s*.rpm" %(repo_path, "asr9k-bng-supp-x64"))
+                pre_req_rpms += glob.glob(pre_req_rpm)
+            for el in pre_req_rpms:
+                if not re.search('CSC[a-z][a-z]\d{5}', el):
+                    pre_req_rpm_list.append(el)
+        if "-mpls-te-" in pkg:
+            for repo_path in repo_paths:
+                pre_req_rpm=("%s/*%s*.rpm" %(repo_path, "-mpls-"))
+                pre_req_rpms += glob.glob(pre_req_rpm)
+            for el in pre_req_rpms:
+                if not re.search('CSC[a-z][a-z]\d{5}', el) and not "-mpls-te-" in el:
+                    pre_req_rpm_list.append(el)
+        return pre_req_rpm_list
+
+    @staticmethod
+    def validate_and_return_list(platform, repo_paths, pkglist):
+        repo_files = []
+        new_repo_paths = []
+        rpm_tar_list = []
+        tmp_file_list = []
+        require_rpms_list = []
+        require_name_list = []
+        ciso_rpm_files = []
+        tar_rpm_file_list = []
+
+        for repo in repo_paths:
+            for pkg in pkglist:
+                if re.search('CSC[a-z][a-z]\d{5}', pkg):
+
+                    # DDTS ID with tar extension
+                    if pkg.endswith('.tar'):
+                        filepath=("%s/%s" %(repo, pkg))
+                        if os.path.isfile(filepath):
+                            if not Rpmdb.tmp_smu_tar_extract_path:
+                                pwd=cwd
+                                Rpmdb.tmp_smu_tar_extract_path = tempfile.mkdtemp(dir=pwd)
+                            run_cmd("tar -xf %s -C %s" % (filepath, Rpmdb.tmp_smu_tar_extract_path))
+                            run_cmd("ls -ltr %s" % (Rpmdb.tmp_smu_tar_extract_path))
+                            tar_rpm_file_list = glob.glob(Rpmdb.tmp_smu_tar_extract_path+"/*.rpm")
+                            repo_files.extend(tar_rpm_file_list)
+                            for el in tar_rpm_file_list:
+                                if platform in os.path.basename(el):
+                                    cmd = "rpm -qpR %s | grep -e %s | grep  ' = '" %(el, platform)
+                                    result = run_cmd(cmd)
+
+                                    if len(require_name_list) == 0:
+                                        require_name_list = result["output"].splitlines()
+                                    else:
+                                        require_name_list = list(set(require_name_list) | set(result["output"].splitlines()))
+                                    logger.debug("XR rpm require list %s\n" % (require_name_list))
+                                    for repo_path in repo_paths:
+                                        cisco_rpm=("%s/%s*.rpm" %(repo_path, platform))
+                                        ciso_rpm_files += glob.glob(cisco_rpm)
+
+                                    for require_field in require_name_list:
+                                        for cisco_rpm_file in ciso_rpm_files:
+                                            if "-sysadmin-" not in cisco_rpm_file:
+                                                cmd = "rpm -qp --provides %s " %(cisco_rpm_file)
+                                                result = run_cmd(cmd)
+                                                if require_field in result["output"]:
+                                                    logger.debug("Dependant rpm: %s\n" %(cisco_rpm_file))
+                                                    repo_files.append(cisco_rpm_file)
+                                                    pre_req_rpm_list = Rpmdb.get_pre_req_opt_rpm(repo_paths, cisco_rpm_file)
+                                                    repo_files.extend(pre_req_rpm_list)
+                                                    break
+                            new_repo_paths.append(Rpmdb.tmp_smu_tar_extract_path)
+
+                    # DDTS ID with rpm extension
+                    elif pkg.endswith('.rpm'):
+                        filepath=("%s/%s" %(repo, pkg))
+                        if os.path.isfile(filepath):
+                            # sysadmin rpms -> include missing arch rpms
+                            if "-sysadmin-" in pkg:
+                                temp=pkg.split('.')
+                                if "-hostos-" not in pkg:
+                                    pkg_nvr='.'.join(temp[:-2])
+                                else:
+                                    pkg_nvr='.'.join(temp[:-3])
+                                host_rpms_filepath=("%s/*%s*" %(repo, pkg_nvr))
+                                require_rpms_list += glob.glob(host_rpms_filepath)
+                                for element in require_rpms_list:
+                                    repo_files.append(element)
+                            # Thirdparty rpms
+                            elif platform not in pkg:
+                                result = run_cmd("rpm -qp --qf '%{NAME}' " + filepath)
+                                host_rpms_filepath=("%s/*%s*" %(repo, result["output"]))
+                                require_rpms_list += glob.glob(host_rpms_filepath)
+                                for element in require_rpms_list:
+                                    cmd = "rpm -qpR %s | grep -e '>=' -e '=' | cut -d ' ' -f1" %(element)
+                                    result = run_cmd(cmd)
+                                    if len(require_name_list) == 0:
+                                        require_name_list = result["output"].splitlines()
+                                    else:
+                                        require_name_list = list(set(require_name_list) | set(result["output"].splitlines()))
+                                    repo_files.append(element)
+                                logger.debug("require list \n%s\n" %(require_name_list))
+                                for require_name in require_name_list:
+                                    host_rpms_filepath=("%s/*%s*" %(repo, require_name))
+                                    require_rpms_list += glob.glob(host_rpms_filepath)
+                                    for element in require_rpms_list:
+                                        repo_files.append(element)
+                            # XR rpms
+                            elif platform in pkg:
+                                cmd = "rpm -qpR %s | grep -e %s | grep  ' = '" %(filepath, platform)
+                                result = run_cmd(cmd)
+
+                                if len(require_name_list) == 0:
+                                    require_name_list = result["output"].splitlines()
+                                else:
+                                    require_name_list = list(set(require_name_list) | set(result["output"].splitlines()))
+                                logger.debug("XR rpm require list %s\n" % (require_name_list))
+                                for repo_path in repo_paths:
+                                    cisco_rpm=("%s/%s*.rpm" %(repo_path, platform))
+                                    ciso_rpm_files += glob.glob(cisco_rpm)
+
+                                for require_field in require_name_list:
+                                    for cisco_rpm_file in ciso_rpm_files:
+                                        if "-sysadmin-" not in cisco_rpm_file:
+                                            cmd = "rpm -qp --provides %s " %(cisco_rpm_file)
+                                            result = run_cmd(cmd)
+                                            if require_field in result["output"]:
+                                                logger.debug("Dependant rpm: %s\n" %(cisco_rpm_file))
+                                                repo_files.append(cisco_rpm_file)
+                                                pre_req_rpm_list = Rpmdb.get_pre_req_opt_rpm(repo_paths, cisco_rpm_file)
+                                                repo_files.extend(pre_req_rpm_list)
+                                                break
+                                repo_files.append(filepath)
+
+                    # DDTS ID with No extension
+                    else:
+                        filepath=("%s/*%s*" %(repo, pkg))
+                        rpm_tar_list += glob.glob(filepath)
+                        if len(rpm_tar_list):
+                            for element in rpm_tar_list:
+                                if element.endswith('.tar'):
+                                    if not Rpmdb.tmp_smu_tar_extract_path:
+                                        pwd=cwd
+                                        Rpmdb.tmp_smu_tar_extract_path = tempfile.mkdtemp(dir=pwd)
+                                    run_cmd("tar -xf %s -C %s" % (element, Rpmdb.tmp_smu_tar_extract_path))
+                                    run_cmd("ls -ltr %s" % (Rpmdb.tmp_smu_tar_extract_path))
+
+                                    tmp_file_list  += glob.glob(Rpmdb.tmp_smu_tar_extract_path+"/*.rpm")
+                                    for el in tmp_file_list:
+                                        if el not in repo_files:
+                                            repo_files.append(el)
+                                    for el in tmp_file_list:
+                                        pre_req_rpm_list = Rpmdb.get_pre_req_opt_rpm(repo_paths, el)
+                                        repo_files.extend(pre_req_rpm_list)
+                                    new_repo_paths.append(Rpmdb.tmp_smu_tar_extract_path)
+
+                                elif element.endswith('.rpm'):
+                                    repo_files.append(element)
+                                    pre_req_rpm_list = Rpmdb.get_pre_req_opt_rpm(repo_paths, element)
+                                    repo_files.extend(pre_req_rpm_list)
+                # Presence of "all" in the input parameter
+                elif pkg == "all":
+                    repo_files = []
+                    for repo in repo_paths:
+                        tmp_file_list += glob.glob(repo+"/*")
+                        for el in tmp_file_list:
+                            # DDTS ID with tar extension
+                            if el.endswith('.tar'):
+                                filepath=("%s/%s" %(repo, el))
+                                if os.path.isfile(filepath):
+                                    if not Rpmdb.tmp_smu_tar_extract_path:
+                                        pwd=cwd
+                                        Rpmdb.tmp_smu_tar_extract_path = tempfile.mkdtemp(dir=pwd)
+                                    run_cmd("tar -xf %s -C %s" % (filepath, Rpmdb.tmp_smu_tar_extract_path))
+                                    run_cmd("ls -ltr %s" % (Rpmdb.tmp_smu_tar_extract_path))
+                                    repo_files += glob.glob(Rpmdb.tmp_smu_tar_extract_path+"/*")
+                                    new_repo_paths.append(Rpmdb.tmp_smu_tar_extract_path)
+                            if el.endswith('.rpm') and el not in repo_files:
+                                repo_files.append(el)
+                # No presence of DDTS ID in the input parameter e.g opt rpms
+                else:
+                    filepath=("%s/%s" %(repo, pkg))
+                    if os.path.isfile(filepath):
+                        repo_files.append(filepath)
+                        pre_req_rpm_list = Rpmdb.get_pre_req_opt_rpm(repo_paths, pkg)
+                        repo_files.extend(pre_req_rpm_list)
+        repo_files = list(set(repo_files))
+        logger.debug("\nFile list After Unification [%s] \n" %(repo_files))
+        return new_repo_paths, repo_files
+
+    def populate_rpmdb(self, fs_root, repo_paths, pkglist, platform, iso_version, full_iso, eRepo):
         retval = 0
         repo_files = []
+        new_repo_paths = repo_paths
+        #tmp_repo_path = []
         if not (repo_paths and fs_root):
             logger.error('Invalid arguments')
             return -1
         for repo in repo_paths:
             logger.info("\nScanning repository [%s]...\n" % (os.path.abspath(repo)))
-            repo_files += glob.glob(repo+"/*")
-            if not len(repo_files):
-                logger.info('RPM repository directory \'%s\' is empty!!' % repo)
+
+            if len(pkglist):
+                self.tmp_smu_repo_path, repo_files = Rpmdb.validate_and_return_list(platform, repo_paths, pkglist)
+            else:
+                repo_files += glob.glob(repo+"/*")
+        if not len(repo_files) and not len(pkglist):
+            logger.info('RPM repository directory \'%s\' is empty!!' % repo)
+        else:
+            new_repo_paths += self.tmp_smu_repo_path
+
         if not len(repo_files):
             return 0 
         # if it is gISO extend look at eRepo as well.
@@ -446,7 +650,7 @@ class Rpmdb:
             self.cleanup_tmp_sp_data()
             
         logger.info("\nTotal %s RPM(s) present in the repository path provided in CLI" % (len(self.rpm_list)))
-        self.repo_path = repo_paths
+        self.repo_path = new_repo_paths
        
         return 0
 
@@ -515,6 +719,11 @@ class Rpmdb:
         if self.tmp_repo_path and os.path.exists(self.tmp_repo_path):
             logger.debug("Cleaning repo temporary data %s" % self.tmp_repo_path)
             shutil.rmtree(self.tmp_repo_path)
+        if len(self.tmp_smu_repo_path):
+            for repo_path in self.tmp_smu_repo_path:
+                if os.path.exists(repo_path):
+                    logger.debug("Cleaning smu repo temporary data %s" % repo_path)
+                    shutil.rmtree(repo_path)
         return 0
     #
     # Categorize rpms into Cisco RPMS and TP RPMS.
@@ -906,7 +1115,7 @@ class Rpmdb:
                          "repository and retry")
             logger.info("\nGolden ISO build process Exited due to above reason") 
             sys.exit(-1)
-        
+
         self.check_all_tp_duplicate_smu(valid_tp_host_rpm, valid_tp_admin_rpm, 
                                         valid_tp_xr_rpm)
 
@@ -1659,6 +1868,10 @@ class Giso:
         self.is_skip_dep_check = False
         self.is_x86_only = False
 
+        self.xrconfig_md5sum = None
+        self.ztp_ini_md5sum = None
+        self.script_md5sum = None
+
         
     #
     # Giso object Setter Api's
@@ -1850,7 +2063,15 @@ class Giso:
             if self.bundle_iso.iso_name.find(sup_iso_type) != -1:
                 return True
         return False
+
+    def set_xrconfig_md5sum(self, xrconfig_md5sum):
+        self.xrconfig_md5sum = xrconfig_md5sum
     
+    def set_ztp_ini_md5sum(self, ztp_ini_md5sum):
+        self.ztp_ini_md5sum = ztp_ini_md5sum
+
+    def set_script_md5sum(self, script_md5sum):
+        self.script_md5sum = script_md5sum
     #
     # Giso object getter Api's
     #
@@ -2057,12 +2278,17 @@ class Giso:
             # if XR Config file present then add the name
             if self.xrconfig is not None:
                 f.write("\n\nXR-Config file:\n")
-                f.write("%s" % Giso.XR_CONFIG_FILE_NAME)
+                f.write("%s %s" % (self.xrconfig_md5sum, Giso.XR_CONFIG_FILE_NAME))
+
+            # if ztp ini file present then add the name
+            if self.ztp_ini is not None:
+                f.write("\n\nZTP INI file:\n")
+                f.write("%s %s" % (self.ztp_ini_md5sum, Giso.ZTP_INI_FILE_NAME))
              
             # if autorun script present then add the name
             if self.script is not None:
                 f.write("\n\nUser script:\n")
-                f.write("%s" % Giso.GISO_SCRIPT)
+                f.write("%s %s" % (self.script_md5sum, Giso.GISO_SCRIPT))
 
         iso_mdata = mdata['iso_mdata']
         iso_mdata['name'] = "%s-%s"%(giso_name_string, iso.get_iso_version())
@@ -2434,6 +2660,11 @@ class Giso:
             shutil.copy(self.xrconfig, "%s/%s" % (self.giso_dir, 
                                                   Giso.XR_CONFIG_FILE_NAME))
             config = True
+            cmd = "md5sum %s" %(self.xrconfig)
+            result = run_cmd(cmd)
+            config_md5sum = result["output"].split(" ")[0]
+            logger.debug("Md5sum of Config: %s" %(config_md5sum))
+            self.set_xrconfig_md5sum(config_md5sum)
 
         if self.ztp_ini:
             logger.info("\nZTP INI file:")
@@ -2441,6 +2672,11 @@ class Giso:
             shutil.copy(self.ztp_ini, "%s/%s" % (self.giso_dir, 
                                                   Giso.ZTP_INI_FILE_NAME))
             ztp_ini = True
+            cmd = "md5sum %s" %(self.ztp_ini)
+            result = run_cmd(cmd)
+            ztp_ini_md5sum = result["output"].split(" ")[0]
+            logger.debug("Md5sum of ztp_ini: %s" %(ztp_ini_md5sum))
+            self.set_ztp_ini_md5sum(ztp_ini_md5sum)
 
         if self.sp_info_path:
             #logger.info('\t%s' % self.sp_info_path)
@@ -2457,6 +2693,11 @@ class Giso:
                                                   Giso.GISO_SCRIPT))
             cmd = "chmod +x %s/%s"%(self.giso_dir, Giso.GISO_SCRIPT)
             script = True
+            cmd = "md5sum %s" %(self.script)
+            result = run_cmd(cmd)
+            script_md5sum = result["output"].split(" ")[0]
+            logger.debug("Md5sum of script: %s" %(script_md5sum))
+            self.set_script_md5sum(script_md5sum)
  
         rpm_db.cleanup_tmp_sp_data()
 
@@ -2833,6 +3074,9 @@ def parsecli():
     parser.add_argument('-g', '--gisoInfo', dest='gisoInfo', action='store_true',
                         help='To display Golden ISO Information')
 
+    parser.add_argument('--pkglist', dest='pkglist', type=str,
+                        required=False, action='append', nargs='+',
+                        help='Takes optional rpm or smu name or smu tar or ddts id or all as keyword')
     parser.add_argument('-v', '--version', 
                         action='version',                    
                         help='Print version of this script and exit',
@@ -2928,6 +3172,7 @@ def print_giso_info(iso_file):
         logger.info("\n%s\n" %(result["output"]))
 
 def main(argv):
+    pkglist=""
     with Giso() as giso:
         # set Extend gISO it is incremental giso build
         if argv.gisoExtend:
@@ -2986,6 +3231,12 @@ def main(argv):
 
         if argv.x86_only:
             giso.is_x86_only = True
+
+        if argv.pkglist:
+            giso.pkglist = True
+            pkglist=argv.pkglist[0]
+            #logger.info("argv.pkglist = %s\n" %(argv.pkglist))
+
         #
         # 1.2 Scan for XR-Config file. 
         #
@@ -3007,7 +3258,7 @@ def main(argv):
         if argv.rpmRepo:
 
             # 1.3.1 Scan repository and build RPM data base.
-            rpm_db.populate_rpmdb(fs_root, argv.rpmRepo[0],
+            rpm_db.populate_rpmdb(fs_root, argv.rpmRepo[0], pkglist,
                  giso.get_bundle_iso_platform_name(), 
                  giso.get_bundle_iso_version(),
                  giso.is_full_iso_require,
