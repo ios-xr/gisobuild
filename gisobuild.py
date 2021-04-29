@@ -25,7 +25,7 @@ import string
 import stat
 import pprint
 
-__version__ = '0.27'
+__version__ = '0.28'
 GISO_PKG_FMT_VER = 1.0
 
 try:
@@ -1563,6 +1563,7 @@ class Iso(object):
     RPM_TEST_LOG = "/tmp/rpmtest.log"
     RPM_OPTIONS = " rpm -i --test --noscripts "
     GRUB_FILES = ["boot/grub2/grub-usb.cfg", "boot/grub2/grub.cfg"]
+    INSTALL_PKG_PLATFORMS = ["ncs5500", "asr9k-x64", "ncs1k", "ncs1001", "ncs1004", "ncs5k"]
 
     def __init__(self):
         self.iso_name = None
@@ -1577,6 +1578,7 @@ class Iso(object):
         self.com_iso_mount_path = None
         self.iso_pkg_fmt_ver = None
         self.shrinked_iso_extract_path = None
+        self.matrix_extract_path = None
 
     def create_com_iso_path(self, iso_path):
         dirpath = os.path.dirname(iso_path)
@@ -1619,6 +1621,19 @@ class Iso(object):
                 #print "self.com_iso_path = %s is not valid " % self.com_iso_path
             
         iso_info_file.close()
+
+        #Copy matrix files from the XR ISO to the extraction path 
+        src_mpath = os.path.join(self.iso_mount_path, "upgrade_matrix")
+        dst_mpath = os.path.join(pwd, "upgrade_matrix")
+        if os.path.exists(dst_mpath):
+            shutil.rmtree(dst_path)
+        if os.path.exists(src_mpath):
+            try: 
+                shutil.copytree(src_mpath, dst_mpath)
+                run_cmd("chmod 644 %s/*" % (dst_mpath))
+                self.matrix_extract_path = dst_mpath
+            except:
+                pass
 
     # Iso getter apis
     def get_iso_path(self):
@@ -1685,6 +1700,9 @@ class Iso(object):
     def get_shrinked_iso_extract_path(self):
         return self.shrinked_iso_extract_path
 
+    def get_matrix_extract_path(self):
+        return self.matrix_extract_path
+
     def do_compat_check(self, repo_path, input_rpms, iso_key, eRepo):
         rpm_file_list = ""
         all_rpms = []
@@ -1718,6 +1736,27 @@ class Iso(object):
                 shutil.copy(rpm, rpm_staging_dir)
                 rpm_file_list = "%s/rpms/%s  " % (rpm_file_list,
                                               os.path.basename(rpm))
+
+                #Extract matrix files from the infra/iosxr-install SMU if present and copy them to extraction path
+                pwd = os.getcwd()
+                self.matrix_extract_path = os.path.join(pwd, "upgrade_matrix")
+                if self.iso_platform_name in Iso.INSTALL_PKG_PLATFORMS:
+                   matrix_pkg = "iosxr-install-"
+                else:
+                   matrix_pkg = "-infra-"
+                if "CSC" in rpm and matrix_pkg in rpm:
+                   rpm_extract_dir = tempfile.mkdtemp(dir=pwd)
+                   extracted_files_list = os.path.join(rpm_extract_dir, "filelist.txt")
+                   cmd = "rpm2cpio %s | (cd %s ; cpio -idmv \"*/compatibility_matrix_*\" >> %s 2>&1)" %(rpm, rpm_extract_dir, extracted_files_list)
+                   run_cmd(cmd)
+                   with open(extracted_files_list, 'r') as fd:
+                      matrix_files = fd.read().splitlines()
+                   for f in matrix_files:
+                      if os.path.exists(self.matrix_extract_path) and f.endswith(".json"):
+                         logger.debug("Extracted %s from the SMU %s" %(f, rpm))               
+                         shutil.copy(os.path.join(rpm_extract_dir, f), self.matrix_extract_path)
+                   shutil.rmtree(rpm_extract_dir, ignore_errors=True)
+                   run_cmd("cd %s" % (pwd))
               else:
                 # if RPM doesn't exist look at eRepo
                 eRpm = rpm.split('/')[-1]
@@ -1872,6 +1911,7 @@ class Giso:
         self.ztp_ini_md5sum = None
         self.script_md5sum = None
 
+        self.matrix_extract_path = None
         
     #
     # Giso object Setter Api's
@@ -2145,12 +2185,14 @@ class Giso:
             iso = Iso()
             vm_type_iso_file = self.get_vm_type_iso_file(vm_type)
             iso.set_iso_info(vm_type_iso_file)
+            mpath = iso.get_matrix_extract_path()
+            if mpath:
+               self.matrix_extract_path = mpath
             self.vm_iso[vm_type] = iso
         else:
             iso = self.vm_iso[vm_type]
         return iso.do_compat_check(self.repo_path, input_rpms,
                                    self.ISO_RPM_KEY, self.ExtendRpmRepository)
-
     def get_vm_type_iso_file(self, vm_type):
         iso_file_names = glob.glob('%s/iso/*' % 
                                    (self.get_bundle_iso_extract_path()))
@@ -2711,7 +2753,13 @@ class Giso:
             self.update_grub_cfg(self.bundle_iso)
             shutil.copy(logfile, '%s/%s' % (self.giso_dir, 
                                             Giso.SMU_CONFIG_SUMMARY_FILE))
-
+            #Copy the upgrade matrix files to the top level of GISO
+            dest_dir = os.path.join(self.giso_dir, "upgrade_matrix")
+            src_dir = self.matrix_extract_path
+            if src_dir and os.path.exists(src_dir):
+               if not os.path.exists(dest_dir):
+                  shutil.copytree(src_dir, dest_dir)
+               shutil.rmtree(src_dir, ignore_errors=True)
 
             if OPTIMIZE_CAPABLE and args.optimize:
                 # If optimised GISO, 
@@ -3529,3 +3577,4 @@ if __name__ == "__main__":
         sys.exit(0)
     finally:
         logger.debug("################END#####################")
+
