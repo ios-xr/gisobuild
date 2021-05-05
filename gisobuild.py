@@ -25,7 +25,7 @@ import string
 import stat
 import pprint
 
-__version__ = '0.28'
+__version__ = '0.29'
 GISO_PKG_FMT_VER = 1.0
 
 try:
@@ -117,6 +117,10 @@ class Migtar:
 
         if os.path.exists(self.EFI):
             run_cmd('rm -rf ' + self.EFI)
+
+        dst_mpath = os.path.join(pwd, "upgrade_matrix")
+        if os.path.exists(dst_mpath):
+            shutil.rmtree(dst_mpath)
 
     def __generate_md5(self, inputpath):
         if os.path.isfile(inputpath):
@@ -1625,8 +1629,6 @@ class Iso(object):
         #Copy matrix files from the XR ISO to the extraction path 
         src_mpath = os.path.join(self.iso_mount_path, "upgrade_matrix")
         dst_mpath = os.path.join(pwd, "upgrade_matrix")
-        if os.path.exists(dst_mpath):
-            shutil.rmtree(dst_path)
         if os.path.exists(src_mpath):
             try: 
                 shutil.copytree(src_mpath, dst_mpath)
@@ -3577,4 +3579,5 @@ if __name__ == "__main__":
         sys.exit(0)
     finally:
         logger.debug("################END#####################")
+
 
