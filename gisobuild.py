@@ -25,7 +25,7 @@ import string
 import stat
 import pprint
 
-__version__ = '0.29'
+__version__ = '0.30'
 GISO_PKG_FMT_VER = 1.0
 
 try:
@@ -500,13 +500,14 @@ class Rpmdb:
                                         repo_files.append(element)
                             # XR rpms
                             elif platform in pkg:
-                                cmd = "rpm -qpR %s | grep -e %s | grep  ' = '" %(filepath, platform)
-                                result = run_cmd(cmd)
+                                if SPIRIT_BOOT_SUBSTRING  not in filepath:
+                                    cmd = "rpm -qpR %s | grep -e %s | grep  ' = '" %(filepath, platform)
+                                    result = run_cmd(cmd)
 
-                                if len(require_name_list) == 0:
-                                    require_name_list = result["output"].splitlines()
-                                else:
-                                    require_name_list = list(set(require_name_list) | set(result["output"].splitlines()))
+                                    if len(require_name_list) == 0:
+                                        require_name_list = result["output"].splitlines()
+                                    else:
+                                        require_name_list = list(set(require_name_list) | set(result["output"].splitlines()))
                                 logger.debug("XR rpm require list %s\n" % (require_name_list))
                                 for repo_path in repo_paths:
                                     cisco_rpm=("%s/%s*.rpm" %(repo_path, platform))
