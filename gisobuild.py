@@ -25,7 +25,7 @@ import string
 import stat
 import pprint
 
-__version__ = '0.30'
+__version__ = '0.31'
 GISO_PKG_FMT_VER = 1.0
 
 try:
@@ -1876,7 +1876,7 @@ class Giso:
     GOLDEN_STRING = "golden"
     GOLDEN_K9_STRING = "goldenk9"
     GISO_INFO_TXT = "giso_info.txt"
-    NESTED_ISO_PLATFORMS = ["ncs5500", "ncs560", "ncs540"]
+    NESTED_ISO_PLATFORMS = ["ncs5500", "ncs560", "ncs540", "iosxrwbd"]
     GISO_SCRIPT = "autorun"
     ISO_RPM_KEY ="(none)"
     def __init__(self):
@@ -2745,6 +2745,9 @@ class Giso:
             self.set_script_md5sum(script_md5sum)
  
         rpm_db.cleanup_tmp_sp_data()
+
+        if plat == "iosxrwbd":
+            os.symlink("bzImage", "%s/boot/bzImage_GISO" %(self.giso_dir))
 
         if not (rpms or service_pack or config or script or ztp_ini):
             logger.info("Final rpm list or service pack is Zero and "
