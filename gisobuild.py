@@ -421,7 +421,6 @@ class Rpmdb:
         require_name_list = []
         ciso_rpm_files = []
         tar_rpm_file_list = []
-        skip_missing_pkgs = []
 
         for repo in repo_paths:
             for pkg in pkglist:
@@ -464,9 +463,6 @@ class Rpmdb:
                                                     repo_files.extend(pre_req_rpm_list)
                                                     break
                             new_repo_paths.append(Rpmdb.tmp_smu_tar_extract_path)
-                        # not present in repo
-                        else :
-                            skip_missing_pkgs.append(pkg)
 
                     # DDTS ID with rpm extension
                     elif pkg.endswith('.rpm'):
@@ -529,9 +525,6 @@ class Rpmdb:
                                                 repo_files.extend(pre_req_rpm_list)
                                                 break
                                 repo_files.append(filepath)
-                        # not present in repo
-                        else :
-                            skip_missing_pkgs.append(pkg)
 
                     # DDTS ID with No extension
                     else:
@@ -559,9 +552,7 @@ class Rpmdb:
                                     repo_files.append(element)
                                     pre_req_rpm_list = Rpmdb.get_pre_req_opt_rpm(repo_paths, element)
                                     repo_files.extend(pre_req_rpm_list)
-                        # not present in repo
-                        else :
-                            skip_missing_pkgs.append(pkg)
+
                 # Presence of "all" in the input parameter
                 elif pkg == "all":
                     repo_files = []
@@ -588,13 +579,9 @@ class Rpmdb:
                         repo_files.append(filepath)
                         pre_req_rpm_list = Rpmdb.get_pre_req_opt_rpm(repo_paths, pkg)
                         repo_files.extend(pre_req_rpm_list)
-                    # not present in repo
-                    else :
-                        skip_missing_pkgs.append(pkg)
+
         repo_files = list(set(repo_files))
         logger.debug("\nFile list After Unification [%s] \n" %(repo_files))
-        logger.info("\nFollowing pkgs are skipped due to not present in the repository path provided in CLI\n")
-        list(map(lambda file_name: logger.info("\t(-) %s" % os.path.basename(file_name)), skip_missing_pkgs))
         return new_repo_paths, repo_files
 
     def populate_rpmdb(self, fs_root, repo_paths, pkglist, platform, iso_version, full_iso, eRepo):
@@ -612,6 +599,23 @@ class Rpmdb:
                 self.tmp_smu_repo_path, repo_files = Rpmdb.validate_and_return_list(platform, repo_paths, pkglist)
             else:
                 repo_files += glob.glob(repo+"/*")
+
+        # Notify skipped packages which are not present in repo
+        if len(pkglist) and "all" not in pkglist:
+            skipped_pkg = []
+            found = False
+            for item in pkglist:
+                found = False
+                for item1 in repo_files:
+                    if item in item1:
+                        found = True
+                        break
+                if not found:
+                    skipped_pkg.append(item)
+
+            logger.info("\nFollowing pkgs are skipped due to not present in the repository path provided in CLI\n")
+            list(map(lambda file_name: logger.info("\t(-) %s" % os.path.basename(file_name)), skipped_pkg))
+
         if not len(repo_files) and not len(pkglist):
             logger.info('RPM repository directory \'%s\' is empty!!' % repo)
         else:
