@@ -613,7 +613,9 @@ class Rpmdb:
                 if not found:
                     skipped_pkg.append(item)
 
-            logger.info("\nFollowing pkgs are skipped due to not present in the repository path provided in CLI\n")
+            logger.info("\nFollowing packages in input for pkglist were skipped "
+                        "as not present in any of the given repositories, "
+                        "continuing with build\n")
             list(map(lambda file_name: logger.info("\t(-) %s" % os.path.basename(file_name)), skipped_pkg))
 
         if not len(repo_files) and not len(pkglist):
