@@ -25,7 +25,7 @@ import string
 import stat
 import pprint
 
-__version__ = '0.32'
+__version__ = '0.33'
 GISO_PKG_FMT_VER = 1.0
 
 try:
@@ -613,9 +613,10 @@ class Rpmdb:
                 if not found:
                     skipped_pkg.append(item)
 
-            logger.info("\nFollowing packages in input for pkglist were skipped "
-                        "as not present in any of the given repositories, "
-                        "continuing with build\n")
+            if len(skipped_pkg):
+                logger.info("\nFollowing packages in input for pkglist were skipped "
+                        "as these are not present in the given repositories, "
+                        "continuing with Golden ISO build...\n")
             list(map(lambda file_name: logger.info("\t(-) %s" % os.path.basename(file_name)), skipped_pkg))
 
         if not len(repo_files) and not len(pkglist):
@@ -2767,7 +2768,7 @@ class Giso:
  
         rpm_db.cleanup_tmp_sp_data()
 
-        if plat == "iosxrwbd":
+        if plat == "iosxrwbd" and not args.optimize:
             os.symlink("bzImage", "%s/boot/bzImage_GISO" %(self.giso_dir))
 
         if not (rpms or service_pack or config or script or ztp_ini):
