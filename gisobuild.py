@@ -25,7 +25,7 @@ import string
 import stat
 import pprint
 
-__version__ = '0.33'
+__version__ = '0.34'
 GISO_PKG_FMT_VER = 1.0
 
 try:
@@ -57,6 +57,7 @@ SIGNED_651_NCS5500_RPM_PATH = 'giso/boot/initrd.img/iso/system_image.iso/<rpms>'
 OPTIMIZE_CAPABLE = os.path.exists('/sw/packages/jam_IOX/signing/xr_sign')
 AUTO_RPM_BINARY_PATH = "/auto/thirdparty-sdk/host-x86_64/lib/rpm-5.1.9/rpm"
 global_platform_name="None"
+BZIMAGE_712="bzImage-7.1.2"
 
 def run_cmd(cmd):
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, 
@@ -2560,6 +2561,14 @@ class Giso:
             
         return base_rpm_path
 
+    def update_bzimage(self, giso_dir):
+        script_dir = os.path.abspath( os.path.dirname( __file__ ))
+        bzImage_712_path = script_dir + "/" + BZIMAGE_712
+        if os.path.exists(bzImage_712_path):
+            logger.debug("Replacing top level bzImage in GISO with %s to support PXE boot of >2GB ISO" %(bzImage_712_path))
+            cmd="cp %s %s/%s" %(bzImage_712_path, giso_dir, "boot/bzImage")
+            run_cmd(cmd)
+
     #
     # Build Golden ISO.
     #
@@ -2789,6 +2798,10 @@ class Giso:
                   shutil.copytree(src_dir, dest_dir)
                shutil.rmtree(src_dir, ignore_errors=True)
 
+            #update bzimage for 663 fretta to support >2GB ISO
+            if plat == "ncs5500" and self.get_bundle_iso_version() == "6.6.3" :
+               self.update_bzimage(self.giso_dir)
+
             if OPTIMIZE_CAPABLE and args.optimize:
                 # If optimised GISO, 
                 # 1. push RPMs in system_image for nested platform
@@ -2852,6 +2865,10 @@ class Giso:
             fd.write(iso_info_raw)
             fd.close()
             os.chdir(pwd)
+
+            #update bzimage for 663 fretta to support >2GB ISO
+            if global_platform_name == "ncs5500" and self.get_bundle_iso_version() == "6.6.3" :
+               self.update_bzimage(self.system_image_extract_path)
 
             # Recreate system_image.iso
             cmd = "mkisofs -R -b boot/grub/stage2_eltorito -no-emul-boot -boot-load-size 4 \
@@ -2926,6 +2943,11 @@ class Giso:
         # Update initrd signature
         self.update_signature(extract_system_image_initrd_path)
         os.chdir(pwd)
+
+        #update bzimage for 663 fretta to support >2GB ISO
+        if global_platform_name == "ncs5500" and self.get_bundle_iso_version() == "6.6.3" :
+           self.update_bzimage(extract_system_image_initrd_path)
+
         # Recreate system_image.iso
         cmd = "mkisofs -R -b boot/grub/stage2_eltorito -no-emul-boot -boot-load-size 4 \
                    -boot-info-table -o new_system_image.iso %s"%(extract_system_image_initrd_path)
