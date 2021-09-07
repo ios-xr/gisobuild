@@ -25,8 +25,25 @@ import string
 import stat
 import pprint
 
-__version__ = '0.34'
+__version__ = '0.35'
 GISO_PKG_FMT_VER = 1.0
+
+custom_mdata = {
+                "SUPPCARDS" : '(none)',
+                "VMTYPE": '(none)',
+                "CISCOHW" : '(none)',
+                "PACKAGETYPE" : '(none)',
+                "PKGTYPE" : '(none)',
+                "PACKAGEPRESENCE" : '(none)',
+                "RESTARTTYPE" : '(none)',
+                "INSTALLMETHOD" : '(none)',
+                "XRVERSION" : '(none)',
+                "XRRELEASE" : '(none)',
+                "PARENTVERSION" : '(none)',
+                "PIPD" : '(none)',
+                "SKIPRELEASE" : '(none)',
+                "CARDTYPE" : '(none)'
+               }
 
 try:
     from itertools import zip_longest
@@ -76,6 +93,21 @@ def run_cmd(cmd):
         out = error
         raise RuntimeError("Error CMD=%s returned --->%s" % (cmd, out))
     return dict(rc=sprc, output=out)
+
+def run_cmd2 (cmd):
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, shell=True)
+    out, error = process.communicate()
+    sprc = process.returncode
+    if sprc is None or sprc != 0:
+        out = error
+        raise RuntimeError("Error CMD=%s returned --->%s" % (cmd, out))
+    else:
+        ''' rpm returns exit code 0 even when error is populated '''
+        if not out:
+            out = error
+            raise RuntimeError("Error CMD=%s returned --->%s" % (cmd, out))
+    return out.strip()
 
 class Migtar:
     ISO="iso"
@@ -261,14 +293,50 @@ class Rpm:
 
     def populate_mdata(self, fs_root, rpm, is_full_iso):
         self.file_name = rpm
+        rpm_data_filled = False
         # Some RPMs(k9) dont have read access which causes RPM query fail 
         run_cmd(" chmod 644 %s"%(os.path.join(fs_root,rpm)))
         if not is_full_iso:
-            result = run_cmd("chroot "+fs_root+" rpm -qp --qf '%{NAME};%{VERSION};"
-                         "%{RELEASE};%{ARCH};%{PACKAGETYPE};%{PACKAGEPRESENCE};"
-                         "%{PIPD};%{CISCOHW};%{CARDTYPE};%{BUILDTIME};"
-                         "%{GROUP};%{VMTYPE};%{SUPPCARDS};%{PREFIXES};"
-                         "%{XRRELEASE};' "+rpm)
+            group_info = run_cmd("chroot "+fs_root+" rpm -qp --qf '%{GROUP}' "+rpm)
+            if 'SUPPCARDS' in group_info["output"].upper():
+                result = run_cmd("chroot "+fs_root+" rpm -qp --qf '%{NAME};%{VERSION};"
+                             "%{RELEASE};%{ARCH};"
+                             "%{BUILDTIME};"
+                             "%{PREFIXES};%{GROUP};"
+                             "' "+rpm)
+                result_str_list = result["output"].split(";")
+                self.name = result_str_list[0]
+                self.version = result_str_list[1]
+                self.release = result_str_list[2]
+                self.arch = result_str_list[3]
+                self.build_time = result_str_list[4]
+                self.prefixes = result_str_list[5]
+                self.group = result_str_list[6].split(',',1)[0]
+                grp = group_info["output"].split(',', 1)[1]
+                cfg = dict([(item.partition(':')[0].upper(),
+                            item.partition(':')[2])
+                            for item in grp.split(';') if not
+                            item.strip().startswith('#') and item.strip()])
+                '''custom tag SUPPCARDS used to hold data with ',' as delimiter'''
+                if cfg.has_key('SUPPCARDS'):
+                    cfg['SUPPCARDS'] = ','.join(cfg['SUPPCARDS'].split('-'))
+                pkgdict = dict (custom_mdata)
+                pkgdict.update (cfg)
+                self.supp_cards = pkgdict['SUPPCARDS']
+                self.vm_type = pkgdict['VMTYPE']
+                self.package_platform = pkgdict['CISCOHW']
+                self.package_type = pkgdict['PACKAGETYPE']
+                self.package_presence = pkgdict['PACKAGEPRESENCE']
+                self.xrrelease = pkgdict['XRRELEASE']
+                self.package_pipd = pkgdict['PIPD']
+                self.card_type = pkgdict['CARDTYPE']
+                rpm_data_filled = True
+            else:
+                result = run_cmd("chroot "+fs_root+" rpm -qp --qf '%{NAME};%{VERSION};"
+                             "%{RELEASE};%{ARCH};%{PACKAGETYPE};%{PACKAGEPRESENCE};"
+                             "%{PIPD};%{CISCOHW};%{CARDTYPE};%{BUILDTIME};"
+                             "%{GROUP};%{VMTYPE};%{SUPPCARDS};%{PREFIXES};"
+                             "%{XRRELEASE};' "+rpm)
         else:
             if os.path.exists(AUTO_RPM_BINARY_PATH):
                 result = run_cmd(AUTO_RPM_BINARY_PATH+
@@ -280,23 +348,23 @@ class Rpm:
             else:
                 logger.error("Error: %s is not accessible for collecting rpm metadata\n" %(AUTO_RPM_BINARY_PATH))
                 sys.exit(-1)
-
-        result_str_list = result["output"].split(";")
-        self.name = result_str_list[0]
-        self.version = result_str_list[1]
-        self.release = result_str_list[2]
-        self.arch = result_str_list[3]
-        self.package_type = result_str_list[4]
-        self.package_presence = result_str_list[5]
-        self.package_pipd = result_str_list[6]
-        self.package_platform = result_str_list[7]
-        self.card_type = result_str_list[8]
-        self.build_time = result_str_list[9]
-        self.group = result_str_list[10]
-        self.vm_type = result_str_list[11]
-        self.supp_cards = result_str_list[12].split(",")
-        self.prefixes = result_str_list[13]
-        self.xrrelease = result_str_list[14]
+        if not rpm_data_filled:
+            result_str_list = result["output"].split(";")
+            self.name = result_str_list[0]
+            self.version = result_str_list[1]
+            self.release = result_str_list[2]
+            self.arch = result_str_list[3]
+            self.package_type = result_str_list[4]
+            self.package_presence = result_str_list[5]
+            self.package_pipd = result_str_list[6]
+            self.package_platform = result_str_list[7]
+            self.card_type = result_str_list[8]
+            self.build_time = result_str_list[9]
+            self.group = result_str_list[10]
+            self.vm_type = result_str_list[11]
+            self.supp_cards = result_str_list[12].split(",")
+            self.prefixes = result_str_list[13]
+            self.xrrelease = result_str_list[14]
 
         if not is_full_iso:
             result = run_cmd("chroot %s rpm -qp --provides %s" % (fs_root, rpm))
@@ -448,6 +516,7 @@ class Rpmdb:
                                     else:
                                         require_name_list = list(set(require_name_list) | set(result["output"].splitlines()))
                                     logger.debug("XR rpm require list %s\n" % (require_name_list))
+                                    print ("XR rpm require list %s\n" % (require_name_list))
                                     for repo_path in repo_paths:
                                         cisco_rpm=("%s/%s*.rpm" %(repo_path, platform))
                                         ciso_rpm_files += glob.glob(cisco_rpm)
@@ -1843,7 +1912,7 @@ class Iso(object):
                     logger.debug("Ignoring false dependancy")
                     continue
                 # Fretta hack for netbase false dependeancy
-                elif 'netbase' in line:
+                elif 'netbase' or 'rpm' or 'udev' in line:
                     logger.debug("Ignoring false dependancy")
                     continue
                 elif 'signature: NOKEY' in line :
@@ -1886,7 +1955,6 @@ class Iso(object):
                 shutil.rmtree(self.com_iso_mount_path)
         except (IOError, os.error) as why:
             logger.error("Exception why ? = " + str(why))
-
 
 class Giso:
     SUPPORTED_PLATFORMS = ["asr9k", "ncs1k", "ncs1001", "ncs5k", "ncs5500", "ncs6k", "ncs560","ncs540", 'iosxrwb', 'iosxrwbd', "ncs1004", "xrv9k"]
@@ -2170,7 +2238,7 @@ class Giso:
             fs_root = iso.get_iso_extract_path()
             bootstrap_file = \
                 "%s/"\
-                "/etc/rc.d/init.d/cisco-instance/fretta/calvados_bootstrap.cfg"\
+                "/etc/init.d/cisco-instance/fretta/calvados_bootstrap.cfg"\
                 % fs_root
             search_str = ''
             if os.path.exists(bootstrap_file):
@@ -2798,8 +2866,10 @@ class Giso:
                   shutil.copytree(src_dir, dest_dir)
                shutil.rmtree(src_dir, ignore_errors=True)
 
-            #update bzimage for 663 fretta to support >2GB ISO
-            if plat == "ncs5500" and self.get_bundle_iso_version() == "6.6.3" :
+            #update bzimage for 663/664/702 fretta to support >2GB ISO
+            if plat == "ncs5500" and ((self.get_bundle_iso_version() == "6.6.3") or
+                                      (self.get_bundle_iso_version() == "6.6.4") or 
+                                      (self.get_bundle_iso_version() == "7.0.2")):
                self.update_bzimage(self.giso_dir)
 
             if OPTIMIZE_CAPABLE and args.optimize:
@@ -2819,14 +2889,21 @@ class Giso:
                 else :
                     self.recreate_initrd_non_nested_platform()
                 self.update_signature(self.giso_dir)
-                cmd = "mkisofs -R -b boot/grub/stage2_eltorito -no-emul-boot \
-                    -boot-load-size 4 -boot-info-table -o %s %s" % (self.giso_name, self.giso_dir)
+                if os.path.exists("boot/grub/stage2_eltorito"):
+                    cmd = "mkisofs -R -b boot/grub/stage2_eltorito -no-emul-boot -input-charset utf-8 \
+                        -boot-load-size 4 -boot-info-table -o %s %s" % (self.giso_name, self.giso_dir)
+                else:
+                    cmd = "mkisofs -R -o %s %s" % (self.giso_name, self.giso_dir)
                 run_cmd(cmd)
 
             else:
-               run_cmd('mkisofs -R -b boot/grub/stage2_eltorito -no-emul-boot \
-                    -boot-load-size 4 -boot-info-table -o %s %s'
-                    % (self.giso_name, self.giso_dir))
+                if os.path.exists("boot/grub/stage2_eltorito"):
+                    run_cmd('mkisofs -R -b boot/grub/stage2_eltorito -no-emul-boot -input-charset utf-8 \
+                            -boot-load-size 4 -boot-info-table -o %s %s'
+                            % (self.giso_name, self.giso_dir))
+                else :
+                    cmd = "mkisofs -R -o %s %s" % (self.giso_name, self.giso_dir)
+                run_cmd(cmd)
         return 0
             
     def build_system_image(self):
@@ -2866,13 +2943,19 @@ class Giso:
             fd.close()
             os.chdir(pwd)
 
-            #update bzimage for 663 fretta to support >2GB ISO
-            if global_platform_name == "ncs5500" and self.get_bundle_iso_version() == "6.6.3" :
+            #update bzimage for 663/664/702 fretta to support >2GB ISO
+            if global_platform_name == "ncs5500" and ((self.get_bundle_iso_version() == "6.6.3") or
+                                                      (self.get_bundle_iso_version() == "6.6.4") or
+                                                      (self.get_bundle_iso_version() == "7.0.2")):
                self.update_bzimage(self.system_image_extract_path)
 
             # Recreate system_image.iso
-            cmd = "mkisofs -R -b boot/grub/stage2_eltorito -no-emul-boot -boot-load-size 4 \
-                   -boot-info-table -o new_system_image.iso %s"%(self.system_image_extract_path)
+            if os.path.exists("boot/grub/stage2_eltorito"):
+                cmd = "mkisofs -R -b boot/grub/stage2_eltorito -no-emul-boot -boot-load-size 4 \
+                       -boot-info-table -o new_system_image.iso %s"%(self.system_image_extract_path)
+            else:
+                cmd = "mkisofs -R -o new_system_image.iso %s"%(self.system_image_extract_path)
+
             run_cmd(cmd)
 
             # Cleanup
@@ -2944,13 +3027,19 @@ class Giso:
         self.update_signature(extract_system_image_initrd_path)
         os.chdir(pwd)
 
-        #update bzimage for 663 fretta to support >2GB ISO
-        if global_platform_name == "ncs5500" and self.get_bundle_iso_version() == "6.6.3" :
+        #update bzimage for 663/664/702 fretta to support >2GB ISO
+        if global_platform_name == "ncs5500" and ((self.get_bundle_iso_version() == "6.6.3") or
+                                                  (self.get_bundle_iso_version() == "6.6.4") or
+                                                  (self.get_bundle_iso_version() == "7.0.2")):
            self.update_bzimage(extract_system_image_initrd_path)
 
         # Recreate system_image.iso
-        cmd = "mkisofs -R -b boot/grub/stage2_eltorito -no-emul-boot -boot-load-size 4 \
-                   -boot-info-table -o new_system_image.iso %s"%(extract_system_image_initrd_path)
+        if os.path.exists("boot/grub/stage2_eltorito"):
+            cmd = "mkisofs -R -b boot/grub/stage2_eltorito -no-emul-boot -boot-load-size 4 \
+                       -boot-info-table -o new_system_image.iso %s"%(extract_system_image_initrd_path)
+        else:
+            cmd = "mkisofs -R -o new_system_image.iso %s"%(extract_system_image_initrd_path)
+
         run_cmd(cmd) 
         run_cmd("mv new_system_image.iso %s"%(self.system_image))
         # replace system_image.iso
@@ -3015,10 +3104,11 @@ class Giso:
         logger.debug("ISO path: %s" %(self.bundle_iso.get_iso_path()))
         plat = self.get_bundle_iso_platform_name()
         if plat in Giso.NESTED_ISO_PLATFORMS :
-            cmd = "isoinfo -i %s -R -x /boot/initrd.img | " \
+            cmd = "IFS='[] ' read -a a <<< $(isoinfo -i %s -R -l | grep \" initrd.img\") " \
+                  "&& dd bs=2048 skip=${a[8]} if=%s | head -${a[4]}c | " \
                   "cpio -i --to-stdout --quiet  etc/show_version.txt | " \
                   "grep \"Lineup =\" | cut -d ' ' -f3" \
-                   %(self.bundle_iso.get_iso_path())
+                  %(self.bundle_iso.get_iso_path(), self.bundle_iso.get_iso_path())
         else :
             cmd = "isoinfo -i %s -R -x /boot/initrd.img | gunzip -c | " \
                   "cpio -i --to-stdout --quiet  etc/show_version.txt | " \
@@ -3117,7 +3207,6 @@ class Giso:
             self.bundle_iso.__exit__(type, value, tb)
             if self.system_image and os.path.exists(self.system_image):
                 os.remove(self.system_image)
-
          
 def parsecli():
     parser = argparse.ArgumentParser(description="Utility to build \
@@ -3571,9 +3660,8 @@ def readiso(iso_file, out_dir):
             file_name = line.split()[-1]
             if file_name == ".." :
                 continue
-            dir_file = os.path.join("/",dir_name,file_name)
             out_dir_file = os.path.join(out_dir,dir_name,file_name)
-            cmd = "%s -R -i %s -x %s > %s"%(ISOINFO,iso_file,dir_file,out_dir_file)
+            cmd = "IFS='[] ' read -a a <<< $(%s -i %s -R -l | grep \" %s\") && dd bs=2048 skip=${a[8]} if=%s | head -${a[4]}c > %s" %(ISOINFO, iso_file, file_name, iso_file, out_dir_file)
             run_cmd(cmd)
 
 if __name__ == "__main__":
