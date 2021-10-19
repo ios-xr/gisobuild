@@ -25,7 +25,7 @@ import string
 import stat
 import pprint
 
-__version__ = '0.35'
+__version__ = '0.36'
 GISO_PKG_FMT_VER = 1.0
 
 custom_mdata = {
@@ -78,7 +78,7 @@ BZIMAGE_712="bzImage-7.1.2"
 
 def run_cmd(cmd):
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, 
-                               stderr=subprocess.PIPE, shell=True)
+                               stderr=subprocess.PIPE, shell=True, executable='/bin/bash')
     out, error = process.communicate()
     try:
         out = out.decode('utf8')
@@ -2889,7 +2889,7 @@ class Giso:
                 else :
                     self.recreate_initrd_non_nested_platform()
                 self.update_signature(self.giso_dir)
-                if os.path.exists("boot/grub/stage2_eltorito"):
+                if os.path.exists(self.giso_dir+"/boot/grub/stage2_eltorito"):
                     cmd = "mkisofs -R -b boot/grub/stage2_eltorito -no-emul-boot -input-charset utf-8 \
                         -boot-load-size 4 -boot-info-table -o %s %s" % (self.giso_name, self.giso_dir)
                 else:
@@ -2897,10 +2897,10 @@ class Giso:
                 run_cmd(cmd)
 
             else:
-                if os.path.exists("boot/grub/stage2_eltorito"):
-                    run_cmd('mkisofs -R -b boot/grub/stage2_eltorito -no-emul-boot -input-charset utf-8 \
-                            -boot-load-size 4 -boot-info-table -o %s %s'
-                            % (self.giso_name, self.giso_dir))
+                if os.path.exists(self.giso_dir+"/boot/grub/stage2_eltorito"):
+                    cmd = "mkisofs -R -b boot/grub/stage2_eltorito -no-emul-boot -input-charset utf-8 \
+                            -boot-load-size 4 -boot-info-table -o %s %s" \
+                            % (self.giso_name, self.giso_dir)
                 else :
                     cmd = "mkisofs -R -o %s %s" % (self.giso_name, self.giso_dir)
                 run_cmd(cmd)
@@ -2950,7 +2950,7 @@ class Giso:
                self.update_bzimage(self.system_image_extract_path)
 
             # Recreate system_image.iso
-            if os.path.exists("boot/grub/stage2_eltorito"):
+            if os.path.exists(self.system_image_extract_path+"/boot/grub/stage2_eltorito"):
                 cmd = "mkisofs -R -b boot/grub/stage2_eltorito -no-emul-boot -boot-load-size 4 \
                        -boot-info-table -o new_system_image.iso %s"%(self.system_image_extract_path)
             else:
@@ -3034,7 +3034,7 @@ class Giso:
            self.update_bzimage(extract_system_image_initrd_path)
 
         # Recreate system_image.iso
-        if os.path.exists("boot/grub/stage2_eltorito"):
+        if os.path.exists(extract_system_image_initrd_path+"/boot/grub/stage2_eltorito"):
             cmd = "mkisofs -R -b boot/grub/stage2_eltorito -no-emul-boot -boot-load-size 4 \
                        -boot-info-table -o new_system_image.iso %s"%(extract_system_image_initrd_path)
         else:
@@ -3105,7 +3105,7 @@ class Giso:
         plat = self.get_bundle_iso_platform_name()
         if plat in Giso.NESTED_ISO_PLATFORMS :
             cmd = "IFS='[] ' read -a a <<< $(isoinfo -i %s -R -l | grep \" initrd.img\") " \
-                  "&& dd bs=2048 skip=${a[8]} if=%s | head -${a[4]}c | " \
+                  "&& dd bs=2048 skip=${a[8]} if=%s | head -c ${a[4]} | " \
                   "cpio -i --to-stdout --quiet  etc/show_version.txt | " \
                   "grep \"Lineup =\" | cut -d ' ' -f3" \
                   %(self.bundle_iso.get_iso_path(), self.bundle_iso.get_iso_path())
@@ -3661,7 +3661,7 @@ def readiso(iso_file, out_dir):
             if file_name == ".." :
                 continue
             out_dir_file = os.path.join(out_dir,dir_name,file_name)
-            cmd = "IFS='[] ' read -a a <<< $(%s -i %s -R -l | grep \" %s\") && dd bs=2048 skip=${a[8]} if=%s | head -${a[4]}c > %s" %(ISOINFO, iso_file, file_name, iso_file, out_dir_file)
+            cmd = "IFS='[] ' read -a a <<< $(%s -i %s -R -l | grep \" %s\") && dd bs=2048 skip=${a[8]} if=%s | head -c ${a[4]} > %s" %(ISOINFO, iso_file, file_name, iso_file, out_dir_file)
             run_cmd(cmd)
 
 if __name__ == "__main__":
