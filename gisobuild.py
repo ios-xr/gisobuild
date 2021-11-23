@@ -25,7 +25,7 @@ import string
 import stat
 import pprint
 
-__version__ = '0.36'
+__version__ = '0.37'
 GISO_PKG_FMT_VER = 1.0
 
 custom_mdata = {
@@ -298,7 +298,7 @@ class Rpm:
         run_cmd(" chmod 644 %s"%(os.path.join(fs_root,rpm)))
         if not is_full_iso:
             group_info = run_cmd("chroot "+fs_root+" rpm -qp --qf '%{GROUP}' "+rpm)
-            if 'SUPPCARDS' in group_info["output"].upper():
+            if 'SUPPCARDS' in group_info["output"].upper() or 'XRRELEASE' in group_info["output"].upper():
                 result = run_cmd("chroot "+fs_root+" rpm -qp --qf '%{NAME};%{VERSION};"
                              "%{RELEASE};%{ARCH};"
                              "%{BUILDTIME};"
@@ -1023,7 +1023,7 @@ class Rpmdb:
                 mre = re.search(r'(.*)-(.*)-(.*)\.(.*)(\.rpm)', rpm_name)
                 if mre: 
                     i_rpm_name = mre.groups()[0]
-                    # i_rpm_ver = mre.groups()[1]
+                    i_rpm_ver = mre.groups()[1]
                     # i_rpm_rel = mre.groups()[2]
                     i_rpm_arch = mre.groups()[3]
                     if i_rpm_name == s_rpm_name:
@@ -1049,7 +1049,7 @@ class Rpmdb:
                                                                    base_rpm_arch,
                                                                    "rpm")
                         for rpm in self.tp_rpm_list:
-                            if base_rpm_filename == rpm.file_name:
+                            if base_rpm_filename == rpm.file_name and base_rpm_ver in i_rpm_ver:
                                 return rpm   
         if not base_rpm_filename:
             for rpm in self.tp_rpm_list:
@@ -1869,6 +1869,8 @@ class Iso(object):
         logger.debug("The ISO key is %s"%(iso_key))
         try:
             for pkg in input_rpms_unique:
+                if global_platform_name not in pkg and not re.search('CSC[a-z][a-z]\d{5}', pkg):
+                    continue
                 ret=run_cmd("chroot %s rpm -qip rpms/%s | grep %s"%
                             (self.iso_extract_path, pkg, "Signature"))
                 key=ret["output"].split(" ")[-1].strip('\n')
@@ -2648,6 +2650,7 @@ class Giso:
         service_pack = False
         pwd = cwd
         rpm_count = 0
+        repo = ""
         self.giso_dir = "%s/giso_files_dir" % pwd
         if os.path.exists(self.giso_dir):
             shutil.rmtree(self.giso_dir)
@@ -2739,11 +2742,11 @@ class Giso:
                                 if duplicate_present:
                                     continue
                         rpm_count += 1
+                        if self.ExtendRpmRepository and os.path.isdir(self.ExtendRpmRepository):
+                           self.repo_path.append(self.ExtendRpmRepository)
                         for rpath in self.repo_path:
                             if os.path.isfile(rpath+'/'+rpm_file):
                                repo=rpath 
-                        if not repo:
-                           repo=self.ExtendRpmRepository
                         shutil.copy('%s/%s' % (repo, rpm_file),
                                     giso_repo_path)
                         logger.info('\t%s' % (os.path.basename(rpm_file)))
@@ -3390,6 +3393,10 @@ def main(argv):
             logger.error("Only mini or minik9 image type "
                          "can be used to build Golden ISO")
             return
+
+        if global_platform_name in Giso.NESTED_ISO_PLATFORMS:
+          if argv.gisoExtend:
+             logger.info("\n\t... Extending the gISO ..")
 
         #
         # 1.1.0 Check if migration option is provided for other platform than ASR9k
