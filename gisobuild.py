@@ -25,7 +25,7 @@ import string
 import stat
 import pprint
 
-__version__ = '0.37'
+__version__ = '0.38'
 GISO_PKG_FMT_VER = 1.0
 
 custom_mdata = {
@@ -151,6 +151,7 @@ class Migtar:
         if os.path.exists(self.EFI):
             run_cmd('rm -rf ' + self.EFI)
 
+        pwd=cwd
         dst_mpath = os.path.join(pwd, "upgrade_matrix")
         if os.path.exists(dst_mpath):
             shutil.rmtree(dst_mpath)
