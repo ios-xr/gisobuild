@@ -1,5 +1,6 @@
 # gisobuild
-Golden ISO build tool for ios-xr
+Golden ISO build tool for ios-xr. This is the legacy gisobuild utility
+compliant with python2.
 
 usage: gisobuild.py [-h] -i BUNDLE_ISO [-r RPMREPO] [-c XRCONFIG]
 [-l GISOLABEL] [-m] [-v]
