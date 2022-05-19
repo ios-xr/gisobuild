@@ -1,0 +1,49 @@
+# Template input yaml file to gisobuild script.
+# Options below correspond to the tool input options.
+# --iso ISO             Path to Mini.iso/Full.iso file
+# --repo REPO [REPO ...]
+#                       Path to RPM repository. RPMs are only used if already
+#                       included in the ISO, or specified by the user via the --pkglist option.
+# --pkglist PKGLIST [PKGLIST ...]
+#                       Optional list of rpm or smu to add to the ISO.
+# --bridge-fixes BRIDGE_FIXES [BRIDGE_FIXES ...]
+#                       Bridging rpms to package. Takes from-release or rpm
+#                       names.
+# --xrconfig XRCONFIG   Path to XR config file
+# --ztp-ini ZTP_INI     Path to user ztp ini file
+# --script SCRIPT       Path to user executable script executed as part of
+#                       bootup post activate.
+# --label LABEL         Golden ISO Label
+# --out-directory OUT_DIRECTORY
+#                       Output Directory
+# --yamlfile CLI_YAML   Cli arguments via yaml
+# --clean               Delete output dir before proceeding
+# --migration           To build Migration tar only for ASR9k
+# --docker              Load and run pre-built docker image
+# --x86-only            Use only x86_64 rpms even if other architectures are
+#                       applicable.
+# --version             Print version of this script and exit
+
+packages:
+    iso: /nobackup/bigoswam/repo/asr9k-mini-x-7.4.1.24I.iso
+    repo: 
+        - /nobackup/bigoswam/repo/optrpm_repo
+    pkglist:
+    bridge-fixes:
+        upgrade-from-release:
+        rpms:
+
+user-content:
+    script: 
+    xrconfig: 
+    ztp-ini:
+
+output:
+    label: asr9ktest
+    out-directory: /nobackup/bigoswam/giso_staging
+    clean: true
+
+options:
+    docker: false
+    migration: false
+    x86-only: false

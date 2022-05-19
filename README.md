@@ -1,63 +1,171 @@
-# gisobuild
-Golden ISO build tool for ios-xr
+# gisobuild toolkit for IOS-XR
 
-usage: gisobuild.py [-h] -i BUNDLE_ISO [-r RPMREPO] [-c XRCONFIG]
-[-l GISOLABEL] [-m] [-v]
-
-Utility to build Golden/Custom iso. Please provide atleast repo path or config
-file along with bundle iso
+## Usage
 
 ```
+usage: gisobuild.py [-h] [--iso ISO] [--repo REPO [REPO ...]]
+                    [--bridging-fixes BRIDGE_FIXES [BRIDGE_FIXES ...]]
+                    [--xrconfig XRCONFIG] [--ztp-ini ZTP_INI] [--label LABEL]
+                    [--out-directory OUT_DIRECTORY] [--yamlfile CLI_YAML] [--clean]
+                    [--pkglist PKGLIST [PKGLIST ...]] [--script SCRIPT] [--docker]
+                    [--x86-only] [--migration]
+                    [--remove-packages REMOVE_PACKAGES [REMOVE_PACKAGES ...]]
+                    [--skip-usb-image] [--copy-dir COPY_DIRECTORY]
+                    [--clear-bridging-fixes] [--verbose-dep-check] [--debug]
+                    [--version]
+
+Utility to build Golden ISO for IOS-XR.
+
 optional arguments:
--h, --help show this help message and exit
--r RPMREPO, --repo RPMREPO
-Path to RPM repository
--c XRCONFIG, --xrconfig XRCONFIG
-Path to XR config file
--l GISOLABEL, --label GISOLABEL
-Golden ISO Label
--m, --migration To build Migration tar only for ASR9k
--v, --version Print version of this script and exit
--e, --extend  Adding/appending more rpms to previously built gISO
--f, --fullISO  To build full iso only for xrv9k
--g, --gisoInfo To display Golden ISO Information
+  -h, --help            show this help message and exit
+  --iso ISO             Path to Mini.iso/Full.iso file
+  --repo REPO [REPO ...]
+                        Path to RPM repository. For LNT, user can specify .rpm, .tgz,
+                        .tar filenames, or directories. RPMs are only used if already
+                        included in the ISO, or specified by the user via the
+                        --pkglist option.
+  --bridging-fixes BRIDGE_FIXES [BRIDGE_FIXES ...]
+                        Bridging rpms to package. For EXR, takes from-release or rpm
+                        names; for LNT, the user can specify the same file types as for
+                        the --repo option.
+  --xrconfig XRCONFIG   Path to XR config file
+  --ztp-ini ZTP_INI     Path to user ztp ini file
+  --label LABEL, -l LABEL
+                        Golden ISO Label
+  --out-directory OUT_DIRECTORY
+                        Output Directory
+  --yamlfile CLI_YAML   Cli arguments via yaml
+  --clean               Delete output dir before proceeding
+  --pkglist PKGLIST [PKGLIST ...]
+                        Packages to be added to the output GISO. For eXR: optional rpm
+                        or smu to package. For LNT: either full package filenames or
+                        package names for user installable packages can be specified.
+                        Full package filenames can be specified to choose a particular
+                        version of a package, the rest of the block that the package is
+                        in will be included as well. Package names can be specified to
+                        include optional packages in the output GISO.
+  --docker, --use-container
+                        Build GISO in container environment.Pulls and run pre-built
+                        container image to build GISO.
+  --version             Print version of this script and exit
+
+EXR only build options:
+  --script SCRIPT       Path to user executable script executed as part of bootup post
+                        activate.
+  --x86-only            Use only x86_64 rpms even if other architectures are
+                        applicable.
+  --migration           To build Migration tar only for ASR9k
+
+LNT only build options:
+  --remove-packages REMOVE_PACKAGES [REMOVE_PACKAGES ...]
+                        Remove RPMs, specified in a comma separated list. These are are
+                        matched against user installable package names, and must be the
+                        whole package name, e.g: xr-bgp
+  --skip-usb-image      Do not build the USB image
+  --copy-dir COPY_DIRECTORY
+                        Copy built artefacts to specified directory if provided. The
+                        specified directory must already exist, be writable by the
+                        builder and must not contain a previously built artefact with
+                        the same name.
+  --clear-bridging-fixes
+                        Remove all bridging bugfixes from the input ISO
+  --verbose-dep-check   Verbose output for the dependency check.
+  --debug               Output debug logs to console
 ```
 
-Required arguments:
-```
--i BUNDLE_ISO / --iso BUNDLE_ISO  
-```
+## Description
 
-Where BUNDLE_ISO= Path to Mini.iso/Full.iso file  
+Typically Cisco releases IOS-XR software as a mini/base ISO which contains
+mandatory IOS-XR packages for a given platform and separately a set of
+optional packages and software patches for any bug fixes (SMU). 
+Optional package and SMU are in RPM packaging format.
 
+The Golden ISO tool creates an ISO containing the full contents of
+the mini/base ISO together with optional packages and SMU of the user's
+choice. Once the Golden ISO is created it can be used either for iPXE booting
+a router or used for SU (system upgrade) from the current running version to
+a new version of IOS-XR.
 
-## Golden ISO tool (GISO):
+## Requirements
 
-Typically Cisco releases IOS-XR software as mini ISO which contains mandatory IOS-XR packages for a given platform, set of optional packages as RPMs and software patches for any fixes/enhancement in in release mini ISO and optional packages. Optional package and SMU are in RPM packaging format.
+This tool has the following executable requirements:
+* python >= 3.6
+* rpm >= 4.14
+* cpio >= 2.10
+* gzip >= 1.9
+* createrepo_c
+* isoinfo
+* mkisofs
+* mksquashfs
+* openssl
+* unsquashfs
 
-Customer asked for single image to avoid complexity and confusion of many packages and to server this Cisco have release full iso, but now the complexity is there are difference in requirement of optional packages for different customer , single full ISO is not applicable for all customers , also there are SMUs which gets release as and when there is enhancement or fix for any mandatory and optional packages. Inserting these SMUs in full ISO is not possible.
+It also requires the following Python (>= 3.6) modules:
+* dataclasses
+* defusedxml
+* distutils
+* packaging
+* rpm
+* yaml
 
-To solve this Golden ISO / Custom ISO tool is develloped which can be used on customers site on any linux machine to create ISO with mini image and optional package and SMUs of his choice. Once ISO is created it can be used for iPXE booting router or SU (system upgrade) from any version to another version.
+# Invocation
 
+This tool can be run natively on a Linux host if the dependencies above are met.
+Alternatively, the tool can also be run on a Linux system with Docker enabled
+and the ability to pull the published 'cisco-xr-gisobuild' image from Docker
+Hub, in which case the above dependencies are met by the published image.
 
+To run natively on a Linux host, the following distributions have been tested.
+* Debian 11.2
+* Rocky Linux 8
 
-How to create the custom ISO/ Golden ISO :
+On a native Linux system, which does not have all dependencies met,
+the tool dependencies can be installed on supported distributions above
+by running the following command (possibly via sudo)
+              
+    ./setup/prep_dependency.sh
 
-Tool will be available on router which needs to copied to a linux machine where golden ISO needs to be created. Technically golden ISO can be created on router but due to resource disk/ram and CPUs available are not sufficient , golden ISO creation on router is not supported.
+To load and run the pre-built cisco-xr-gisobuild docker image, ensure that the
+docker service is enabled and it's possible to pull and run published docker
+images.
 
-Requirement on Linux machine for creating golden ISO is following utilities :
+Run the following command to check docker service parameters.
 
-Python 2.6 or higher version
-chroot,
-mount
-mkisofs
-zcat
-Atleast 6 GB of free disk space , 1 GB RAM is needed on linux machine where ISO is being created
-RPM version 5.x is required to be installed
+    docker info
 
+Running the tool:
 
+To run natively on a linux host which has dependency requirements met:
 
-/pkg/bin/Gisobuild.py will be available in RPs(RSPs) IOS-XR. XR's or Linux copy command can be used to
+    ./src/gisobuild.py --iso <input iso> --repo <rpm repo1 rpm_repo2> \
+        --pkglist <pkg1 pkg2 pkg3> --bridging-fixes <smu1 smu2 smu3> \
+        --xrconfig <config.cfg> --ztp-ini <ztp.ini> --script <user_script.sh> \
+        --label <label> --out-directory <out_directory> --clean
 
-copy this tool to linux machine. The tool will have help message for it's usage info.
+The tool has a helpful usage info which lists down the options supported.
 
+When user does not want to specify the inputs via cli, an alternate would be to populate the yaml file template 
+provided in the toolkit and pass the same via:
+
+    ./src/gisobuild.py --yamlfile <input_yaml_cfg>
+
+To override any input in the yaml config file, please use the corresponding cli option and parameter.
+
+    ./src/gisobuild.py --yamlfile <input_yaml_cfg> --label <new_label>
+
+The above command will override the label specified in yaml file with new option provided via cli option --label.
+
+When the host machine does not have its dependency met, but allows pulling and running docker images, enable 
+docker option in yaml file to true and run as (possible with GISO for eXR variants of IOS-XR):
+
+    ./src/gisobuild.py --yamlfile <input_yaml_cfg>
+
+where input_yaml_cfg has:
+
+    docker: true
+
+Output:
+
+The corresponding GISO and build logs are available under the directory
+specified in `--out-directory`. The default if not specified is
+`<pwd>/output_gisobuild`.

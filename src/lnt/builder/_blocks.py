@@ -1,0 +1,912 @@
+# -----------------------------------------------------------------------------
+
+""" Provides APIs for interacting with groups of RPMs as blocks.
+
+Copyright (c) 2022 Cisco and/or its affiliates.
+This software is licensed to you under the terms of the Cisco Sample
+Code License, Version 1.1 (the "License"). You may obtain a copy of the
+License at
+
+        https://developer.cisco.com/docs/licenses
+
+All use of the material herein must be in accordance with the terms of
+the License. All rights not expressly granted by the License are
+reserved. Unless required by applicable law or agreed to separately in
+writing, software distributed under the License is distributed on an "AS
+IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+or implied.
+
+"""
+
+__all__ = (
+    "CantGroupPkgsByPidError",
+    "Block",
+    "GroupedPackages",
+    "TieBlock",
+    "get_xr_foundation_package",
+    "get_xr_optional_packages",
+    "get_xr_required_packages",
+    "group_packages",
+    "is_xr_installable_pkg",
+    "is_xr_pkg",
+)
+
+import collections
+import dataclasses
+import itertools
+import logging
+from typing import (
+    Dict,
+    FrozenSet,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Set,
+    Tuple,
+    Union,
+)
+
+from . import _packages
+
+_log = logging.getLogger(__name__)
+
+
+_CISCO_PID_PREFIX = "cisco-pid-"
+_XR_FOUNDATION = "xr-foundation"
+
+
+class CantGroupPkgsByPidError(Exception):
+    """Error if failed to group packages by PID."""
+
+
+class DuplicateEvraError(Exception):
+    """
+    Error if multiple matching packages have been specified for a given block.
+
+    """
+
+    def __init__(
+        self,
+        evra: _packages.EVRA,
+        pkg1: _packages.Package,
+        pkg2: _packages.Package,
+    ) -> None:
+        """Initialise a DuplicateEvraError."""
+        super().__init__(evra, pkg1, pkg2)
+        self.evra = evra
+        self.pkg1 = pkg1
+        self.pkg2 = pkg2
+
+    def __str__(self) -> str:
+        return (
+            f"Multiple instances of RPM {self.evra} have been specified. "
+            f"Check the contents of {self.pkg1} and {self.pkg2} to remove "
+            "duplications."
+        )
+
+
+def is_xr_pkg(pkg: _packages.Package) -> bool:
+    """
+    Return a boolean indicating whether the given package is an XR package.
+
+    XR packages have a provides tag for "cisco-iosxr".
+
+    """
+    return _get_provides_by_name(pkg, "cisco-iosxr") is not None
+
+
+def is_xr_installable_pkg(pkg: _packages.Package) -> bool:
+    """
+    Return a boolean indicating whether the given package is an XR package
+    that can be installed by the user.
+
+    XR packages have a provides tag for "cisco-iosxr-user-installable".
+
+    """
+    return (
+        _get_provides_by_name(pkg, "cisco-iosxr-user-installable") is not None
+    )
+
+
+@dataclasses.dataclass
+class Block:
+    """
+    Representation of a regular, partitioned block.
+
+    .. attribute:: name
+
+        Name of the block, e.g. `'xr-bgp'`
+
+    .. attribute:: evra
+
+        Epoch, version, release, architecture for every package in the block.
+
+    .. attribute:: top_pkg
+
+        Top-level, user-installable package.
+
+    .. attribute:: instance_pkgs
+
+        All instance packages for the block.
+
+    .. attribute:: partition_pkgs
+
+        All partition packages for the block.
+
+    """
+
+    name: str
+    evra: _packages.EVRA
+    top_pkg: _packages.Package
+    instance_pkgs: Set[_packages.Package]
+    partition_pkgs: Set[_packages.Package]
+
+    @property
+    def all_pkgs(self) -> List[_packages.Package]:
+        """
+        Return a list of all packages in the block
+
+        """
+        return (
+            [self.top_pkg]
+            + list(self.instance_pkgs)
+            + list(self.partition_pkgs)
+        )
+
+    def _get_instance_pkg_on_pid(
+        self, pid: str
+    ) -> Optional[_packages.Package]:
+        """Get the instance packages on the given PID."""
+        # Instance packages have a requires tag for cisco-pid-<pid-name> to
+        # indicate it belongs on <pid-name>
+        for pkg in self.instance_pkgs:
+            if (
+                _get_requires_by_name(pkg, f"{_CISCO_PID_PREFIX}{pid}")
+                is not None
+            ):
+                return pkg
+        return None
+
+    def _get_partition_pkgs_for_instance(
+        self, instance: _packages.Package
+    ) -> Set[_packages.Package]:
+        """Get the partition packages for the given instance package."""
+        # Instance packages have a requires tag on the appropriate partition
+        # packages. They will be of the format "<block-name>-<partition-hash>"
+        # so look for any requires that start "<block-name>-" and match those
+        # against the partition package names.
+        out = set()
+        name_to_partition = {pkg.name: pkg for pkg in self.partition_pkgs}
+        for req in _get_requires_by_prefix(instance, f"{self.name}-"):
+            if req.name in name_to_partition:
+                out.add(name_to_partition[req.name])
+        return out
+
+    def get_pkgs_on_pid(self, pid: str) -> Set[_packages.Package]:
+        """
+        Get the set of packages on the given PID.
+
+        :param pid:
+            The PID to get the packages for.
+
+        :return:
+            The set of packages on the given PID.
+
+        """
+        # The top-level package goes everywhere so always include that.
+        # Instance and partition packages are pid-dependent.
+        pkgs = set([self.top_pkg])
+        instance = self._get_instance_pkg_on_pid(pid)
+        if instance is not None:
+            pkgs.add(instance)
+            pkgs |= self._get_partition_pkgs_for_instance(instance)
+        return pkgs
+
+
+@dataclasses.dataclass
+class TieBlock:
+    """
+    Representation of a thirdparty tie block.
+
+    .. attribute:: name
+
+        Name of the block, e.g. `'xr-os-core'`
+
+    .. attribute:: evra
+
+        Epoch, version, release, architecture for the top-level package.
+
+    .. attribute:: top_pkg
+
+        Top-level, user-installable package.
+
+    .. attribute:: tied_pkgs
+
+        All thirdparty packages for the block.
+
+    """
+
+    name: str
+    evra: _packages.EVRA
+    top_pkg: _packages.Package
+    tied_pkgs: Set[_packages.Package]
+
+    @property
+    def all_pkgs(self) -> List[_packages.Package]:
+        """
+        Return a list of all packages in the block
+
+        """
+        return [self.top_pkg] + list(self.tied_pkgs)
+
+    def get_pkgs_on_pid(self, _: str) -> Set[_packages.Package]:
+        """
+        Get the set of packages on the given PID.
+
+        :param pid:
+            The PID to get the packages for.
+
+        :return:
+            The set of packages on the given PID.
+
+        """
+        # At the moment, all third party packages go to every PID.
+        return set(self.all_pkgs)
+
+
+AnyBlock = Union[Block, TieBlock]
+
+
+class NoBlockForPkgError(Exception):
+    """
+    Error if no block can be found for a constituent package.
+
+    """
+
+    def __init__(self, block_name: str, pkg: _packages.Package) -> None:
+        """
+        Initialize the class.
+
+        :param block_name:
+            The name of the block for the package.
+
+        :param pkg:
+            The package for which a block at the correct version cannot be
+            found.
+
+        """
+        super().__init__(block_name, pkg)
+        self.block_name = block_name
+        self.pkg = pkg
+
+    def __str__(self) -> str:
+        return (
+            f"Cannot find a top-level block package for {str(self.pkg)} in "
+            f"block {self.block_name}"
+        )
+
+
+@dataclasses.dataclass
+class GroupedPackages:
+    """
+    A set of packages grouped into logical blocks.
+
+    Each of the fields below map the block/package name to a mapping of version
+    to the :class:`.Package` object of the given RPM.
+
+    .. attribute:: blocks
+
+        The standard XR blocks in this set of packages. The foundation and
+        packages are considered blocks without instance or partition RPMs.
+
+    .. attribute:: tie_blocks
+
+        The third-party tie blocks in this set of packages including the tied
+        OS RPMs.
+
+    """
+
+    blocks: Dict[str, Dict[_packages.EVRA, Block]] = dataclasses.field(
+        default_factory=lambda: collections.defaultdict(dict)
+    )
+    tie_blocks: Dict[str, Dict[_packages.EVRA, TieBlock]] = dataclasses.field(
+        default_factory=lambda: collections.defaultdict(dict)
+    )
+
+    def get_tie_ui_pkgs(self) -> Iterator[Tuple[str, _packages.Package]]:
+        """
+        Yield all user-installable tie packages in this group.
+
+        Yields `(block name, user-installable tie package)` pairs.
+
+        """
+        for block_name, versioned_tie_blocks in self.tie_blocks.items():
+            for tie_block in versioned_tie_blocks.values():
+                yield block_name, tie_block.top_pkg
+
+    @property
+    def all_blocks(self) -> Iterator[AnyBlock]:
+        """Iterate over all the blocks."""
+        yield from [
+            block
+            for block_versions in self.blocks.values()
+            for block in block_versions.values()
+        ]
+        yield from [
+            tie_block
+            for block_versions in self.tie_blocks.values()
+            for tie_block in block_versions.values()
+        ]
+
+    def get_all_pkgs(self) -> Set[_packages.Package]:
+        """Get the set of all packages in this group."""
+        all_pkgs: Set[_packages.Package] = set()
+        for block in self.all_blocks:
+            all_pkgs |= set(block.all_pkgs)
+        return all_pkgs
+
+    def get_pkgs_per_pid(self) -> Dict[str, Set[_packages.Package]]:
+        """Get a mapping of PID to the packages on that PID."""
+        pid_to_pkgs = dict()
+        for pid, pkg in _get_pid_identifier_packages(self.get_all_pkgs()):
+            pid_to_pkgs[pid] = set([pkg])
+
+            for block in self.all_blocks:
+                pid_to_pkgs[pid] |= block.get_pkgs_on_pid(pid)
+
+        if not pid_to_pkgs:
+            raise CantGroupPkgsByPidError(
+                "Unable to group the packages by PID, no PID identifier "
+                "packages were found."
+            )
+
+        # Error if there are any packages that haven't been grouped onto a pid.
+        # This should never happen.
+        all_grouped_pkgs = set()
+        for pkgs in pid_to_pkgs.values():
+            all_grouped_pkgs |= pkgs
+        all_pkgs = self.get_all_pkgs()
+        ungrouped_pkgs = all_pkgs - all_grouped_pkgs
+        if ungrouped_pkgs:
+            raise NotImplementedError(
+                "Unable to group the following packages by pid: {}".format(
+                    ", ".join(
+                        [str(pkg) for pkg in sorted(ungrouped_pkgs, key=str)]
+                    )
+                )
+            )
+        return pid_to_pkgs
+
+    def add_block(self, block: AnyBlock) -> None:
+        """Add a new block with the given EVRA."""
+        # Repeat ourselves to placate the type checker.
+        evra = block.evra
+        if isinstance(block, Block):
+            _log.debug("Adding block of top package %s", str(block.top_pkg))
+            blocks = self.blocks[block.name]
+            assert isinstance(block, Block)
+            if evra in blocks:
+                raise DuplicateEvraError(
+                    evra, block.top_pkg, blocks[evra].top_pkg
+                )
+            assert evra not in blocks
+            blocks[evra] = block
+        elif isinstance(block, TieBlock):
+            _log.debug(
+                "Adding tie block of top package %s", str(block.top_pkg)
+            )
+            tie_blocks = self.tie_blocks[block.name]
+            assert isinstance(block, TieBlock)
+            if evra in tie_blocks:
+                raise DuplicateEvraError(
+                    evra, block.top_pkg, tie_blocks[evra].top_pkg
+                )
+            tie_blocks[evra] = block
+        else:
+            raise NotImplementedError
+
+    def remove_block(self, block: AnyBlock) -> None:
+        """Remove a block with the given EVRA."""
+        if isinstance(block, Block):
+            del self.blocks[block.name][block.evra]
+            if not self.blocks[block.name]:
+                del self.blocks[block.name]
+        elif isinstance(block, TieBlock):
+            del self.tie_blocks[block.name][block.evra]
+            if not self.tie_blocks[block.name]:
+                del self.tie_blocks[block.name]
+        else:
+            raise NotImplementedError
+
+    def _check_pkg_can_be_added(
+        self,
+        blocks: Union[
+            Dict[str, Dict[_packages.EVRA, Block]],
+            Dict[str, Dict[_packages.EVRA, TieBlock]],
+        ],
+        block_name: str,
+        pkg: _packages.Package,
+    ) -> None:
+        """
+        Check if there is a block for the given package at the correct version.
+
+        :raises NoBlockForPkgError:
+            If there isn't a block at the correct version to add this package
+            to.
+
+        """
+        if block_name not in blocks or pkg.evra not in blocks[block_name]:
+            raise NoBlockForPkgError(block_name, pkg)
+
+    def add_instance_pkg(
+        self, block_name: str, pkg: _packages.Package
+    ) -> None:
+        """Add an instance package to the given block."""
+        _log.debug(
+            "Adding instance package %s to block %s", str(pkg), block_name
+        )
+        self._check_pkg_can_be_added(self.blocks, block_name, pkg)
+        self.blocks[block_name][pkg.evra].instance_pkgs.add(pkg)
+
+    def add_partition_pkg(
+        self, block_name: str, pkg: _packages.Package
+    ) -> None:
+        """Add an partition package to the given block."""
+        _log.debug(
+            "Adding partition package %s to block %s", str(pkg), block_name
+        )
+        self._check_pkg_can_be_added(self.blocks, block_name, pkg)
+        self.blocks[block_name][pkg.evra].partition_pkgs.add(pkg)
+
+    def add_tied_pkg(
+        self,
+        block_name: str,
+        tie_pkg: _packages.Package,
+        tied_pkg: _packages.Package,
+    ) -> None:
+        """Add an tied package to the given block."""
+        _log.debug(
+            "Adding tied package %s to tie block %s", str(tied_pkg), block_name
+        )
+        self._check_pkg_can_be_added(self.tie_blocks, block_name, tie_pkg)
+        self.tie_blocks[block_name][tie_pkg.evra].tied_pkgs.add(tied_pkg)
+
+
+def _get_dep_by_name(
+    deps: FrozenSet[_packages.PackageDep], name: str
+) -> Optional[_packages.PackageDep]:
+    """
+    Return the dependency with the given name from the given set.
+
+    Returns `None` if there is no dependency by that name.
+
+    """
+    for dep in deps:
+        if dep.name == name:
+            return dep
+    return None
+
+
+def _get_provides_by_name(
+    pkg: _packages.Package, name: str
+) -> Optional[_packages.PackageDep]:
+    """
+    Return the provides dependency with the given name for the given package.
+
+    Returns `None` if there is no provides by that name.
+
+    """
+    return _get_dep_by_name(pkg.provides, name)
+
+
+def _get_requires_by_name(
+    pkg: _packages.Package, name: str
+) -> Optional[_packages.PackageDep]:
+    """
+    Return the requires dependency with the given name for the given package.
+
+    Returns `None` if there is no requires by that name.
+
+    """
+    return _get_dep_by_name(pkg.requires, name)
+
+
+def _get_deps_by_suffix(
+    deps: FrozenSet[_packages.PackageDep], suffix: str
+) -> Iterator[_packages.PackageDep]:
+    """Yield dependencies with the given suffix."""
+    for dep in deps:
+        if dep.name.endswith(suffix):
+            yield dep
+
+
+def _get_provides_by_suffix(
+    pkg: _packages.Package, suffix: str
+) -> Iterator[_packages.PackageDep]:
+    """
+    Yield provides dependencies with the given suffix for the given package.
+    """
+    yield from _get_deps_by_suffix(pkg.provides, suffix)
+
+
+def _get_deps_by_prefix(
+    deps: FrozenSet[_packages.PackageDep], prefix: str
+) -> Iterator[_packages.PackageDep]:
+    """Yield dependencies with the given prefix."""
+    for dep in deps:
+        if dep.name.startswith(prefix):
+            yield dep
+
+
+def _get_requires_by_prefix(
+    pkg: _packages.Package, prefix: str
+) -> Iterator[_packages.PackageDep]:
+    """
+    Yield requires dependencies with the given prefix for the given package.
+    """
+    yield from _get_deps_by_prefix(pkg.requires, prefix)
+
+
+def _get_provides_by_prefix(
+    pkg: _packages.Package, prefix: str
+) -> Iterator[_packages.PackageDep]:
+    """
+    Yield provides dependencies with the given prefix for the given package.
+
+    """
+    yield from _get_deps_by_prefix(pkg.provides, prefix)
+
+
+def _get_pid_identifier_packages(
+    pkgs: Iterable[_packages.Package],
+) -> Iterator[Tuple[str, _packages.Package]]:
+    """
+    Yield the subset of packages that are PID identifiers.
+
+    Yields `(pid name, package)` pairs.
+
+    """
+    for pkg in pkgs:
+        pid_deps = set()
+        for dep in _get_provides_by_prefix(pkg, _CISCO_PID_PREFIX):
+            pid_deps.add(dep)
+
+        if not pid_deps:
+            # This package is not a PID identifier so move on
+            continue
+
+        if len(pid_deps) == 1:
+            provider = pid_deps.pop()
+            yield provider.name[len(_CISCO_PID_PREFIX) :], pkg
+        else:
+            raise NotImplementedError(
+                f"Package {pkg} appears to be a PID identifier package "
+                f"for more than one PID via these providers: {pid_deps}"
+            )
+
+
+def _get_ui_packages(
+    pkgs: Iterable[_packages.Package],
+) -> Iterator[_packages.Package]:
+    """
+    Yield the subset of the given packages that are user-installable.
+    """
+    for pkg in pkgs:
+        if _get_provides_by_name(pkg, "cisco-iosxr-user-installable"):
+            yield pkg
+
+
+def _get_instance_packages(
+    candidate_block_names: Set[str], pkgs: Iterable[_packages.Package],
+) -> Iterator[Tuple[str, _packages.Package]]:
+    """
+    Yield the subset of the given packages that are block instance packages.
+
+    Yields `(block name, package)` pairs, where the name identifies which block
+    the package belongs to.
+
+    :param candidate_block_names:
+        Only instance packages belonging to a block named in this set are
+        returned.
+    :param pkgs:
+        Packages to consider.
+
+    """
+    for pkg in pkgs:
+        instance_deps = set()
+        for possible_instance_dep in _get_provides_by_suffix(pkg, "-PID"):
+            block_name, suffix = possible_instance_dep.name.rsplit(
+                "-", maxsplit=1
+            )
+            assert suffix == "PID"
+            if block_name in candidate_block_names:
+                instance_deps.add((block_name, possible_instance_dep))
+
+        if len(instance_deps) == 1:
+            block_name = list(instance_deps)[0][0]
+            yield block_name, pkg
+        elif len(instance_deps) > 1:
+            raise NotImplementedError(
+                f"Package {pkg} appears to be an instance package "
+                f"for multiple blocks via these providers: {instance_deps}"
+            )
+
+
+def _get_partition_packages(
+    candidate_block_names: Set[str], pkgs: Iterable[_packages.Package],
+) -> Iterator[Tuple[str, _packages.Package]]:
+    """
+    Yield the subset of the given packages that are block partition packages.
+
+    Yields `(block name, package)` pairs, where the name identifies which block
+    the package belongs to.
+
+    :param candidate_block_names:
+        Only partition packages belonging to a block named in this set are
+        returned.
+    :param pkgs:
+        Packages to consider. This function operates correctly *only if* there
+        are no top-level, user-installable block packages passed to this
+        parameter.
+
+    """
+    for pkg in pkgs:
+        partition_deps = set()
+        for possible_partition_dep in _get_requires_by_prefix(pkg, "xr-"):
+            block_name = possible_partition_dep.name
+            if block_name in candidate_block_names:
+                partition_deps.add((block_name, possible_partition_dep))
+
+        if len(partition_deps) == 1:
+            block_name = list(partition_deps)[0][0]
+            yield block_name, pkg
+        elif len(partition_deps) > 1:
+            raise NotImplementedError(
+                f"Package {pkg} appears to be a partition package "
+                f"for multiple blocks via these requirements: {partition_deps}"
+            )
+
+
+def _get_tied_packages(
+    tie_pkg: _packages.Package, pkgs: Iterable[_packages.Package],
+) -> Iterator[_packages.Package]:
+    """
+    Yield the subset of the given packages that are thirdparty tied packages.
+
+    :param tie_pkg:
+        Only packages tied to this user-installable tie package are returned.
+    :param pkgs:
+        Packages to consider.
+
+    """
+    requirements = {dep.name: dep.version for dep in tie_pkg.requires}
+    for pkg in pkgs:
+        if str(requirements.get(pkg.name, None)) == pkg.evr:
+            yield pkg
+
+
+def _get_block_name(ui_pkg: _packages.Package) -> Optional[str]:
+    """
+    Given a user-installable package, return its XR block name (including xr-).
+
+    Returns `None` if this RPM doesn't correspond to a block.
+
+    """
+    if _get_provides_by_name(ui_pkg, f"{ui_pkg.name}-BLOCK") is not None:
+        return ui_pkg.name
+    return None
+
+
+def _get_block_from_ui_pkg(pkg: _packages.Package) -> AnyBlock:
+    """
+    Return a block object (of appropriate type) for a top-level package.
+    """
+    block_name = _get_block_name(pkg)
+    if block_name is not None:
+        if _get_requires_by_name(pkg, f"{block_name}-PID") is not None:
+            # Regular block.
+            return Block(
+                name=block_name,
+                evra=pkg.evra,
+                top_pkg=pkg,
+                instance_pkgs=set(),
+                partition_pkgs=set(),
+            )
+
+        else:
+            # Thirdparty tie block.
+            return TieBlock(
+                name=block_name, evra=pkg.evra, top_pkg=pkg, tied_pkgs=set()
+            )
+
+    elif (
+        pkg.name == "xr-mandatory"
+        or _get_provides_by_name(pkg, _XR_FOUNDATION) is not None
+    ):
+        # Treat mandatory and foundation as regular blocks.
+        #
+        # N.B. in both cases use the top-level package name as the block
+        # name (e.g. 'xr-8000-foundation').
+        return Block(
+            name=pkg.name,
+            evra=pkg.evra,
+            top_pkg=pkg,
+            instance_pkgs=set(),
+            partition_pkgs=set(),
+        )
+
+    else:
+        raise NotImplementedError(
+            "Don't know how to classify the user-installable package f{pkg!r}"
+        )
+
+
+class UngroupedXRPackagesError(Exception):
+    """
+    Error for any XR packages that cannot be grouped into blocks.
+
+    """
+
+    def __init__(self, pkgs: Set[_packages.Package]) -> None:
+        """
+        Initialize the class.
+
+        :param pkgs:
+            The packages which haven't been grouped.
+
+        """
+        super().__init__(pkgs)
+        self.pkgs = pkgs
+
+    def __str__(self) -> str:
+        lines = ["Unable to group the following XR packages into blocks:"]
+        lines.extend(sorted(f"  {str(pkg)}" for pkg in self.pkgs))
+        return "\n".join(lines)
+
+
+def group_packages(pkgs: Iterable[_packages.Package]) -> GroupedPackages:
+    """
+    Group packages into logical blocks.
+
+    :param pkgs:
+        The RPM packages to group.
+
+    :return:
+        A :class:`.GroupedPackages` object containing the RPMs grouped into
+        logical blocks.
+
+    """
+    groups = GroupedPackages()
+
+    # Find and process top-level, user-installable packages.
+    all_pkgs = set(pkgs)
+    ui_pkgs = set(_get_ui_packages(all_pkgs))
+    remaining_pkgs = all_pkgs - ui_pkgs
+    for pkg in ui_pkgs:
+        groups.add_block(_get_block_from_ui_pkg(pkg))
+
+    # Find and process block instance packages.
+    all_block_names = set(itertools.chain(groups.blocks, groups.tie_blocks))
+    instance_pkgs = list(
+        _get_instance_packages(all_block_names, remaining_pkgs)
+    )
+    for block_name, pkg in instance_pkgs:
+        try:
+            groups.add_instance_pkg(block_name, pkg)
+        except NoBlockForPkgError as e:
+            # Doesn't match any version of the block; so don't remove from
+            # remaining packages
+            _log.debug(
+                "No block found for instance package: %s", str(e),
+            )
+        else:
+            remaining_pkgs.remove(pkg)
+
+    # Find and process block partition packages.
+    partition_pkgs = list(
+        _get_partition_packages(all_block_names, remaining_pkgs)
+    )
+    for block_name, pkg in partition_pkgs:
+        try:
+            groups.add_partition_pkg(block_name, pkg)
+        except NoBlockForPkgError as e:
+            # Doesn't match any version of the block; so don't remove from
+            # remaining packages
+            _log.debug(
+                "No block found for partition package: %s", str(e),
+            )
+        else:
+            remaining_pkgs.remove(pkg)
+
+    # Find and process thirdparty tied packages.
+    #
+    # A package might be tied to multiple tie blocks (e.g. consider multiple OS
+    # bugfixes for a single release). Thus keep track of all packages consumed
+    # here and substract from remaining only after processing all tie blocks.
+    all_tied_pkgs = set()
+    for block_name, tie_pkg in groups.get_tie_ui_pkgs():
+        tied_pkgs = set(_get_tied_packages(tie_pkg, remaining_pkgs))
+        for pkg in tied_pkgs:
+            assert block_name in groups.tie_blocks
+            assert tie_pkg.evra in groups.tie_blocks[block_name]
+            groups.add_tied_pkg(block_name, tie_pkg, pkg)
+            all_tied_pkgs.add(pkg)
+    remaining_pkgs = remaining_pkgs - all_tied_pkgs
+
+    # Anything left over, we don't know how to deal with.
+    if remaining_pkgs:
+        remaining_xr_pkgs = {pkg for pkg in remaining_pkgs if is_xr_pkg(pkg)}
+        remaining_non_xr_pkgs = remaining_pkgs - remaining_xr_pkgs
+
+        if remaining_non_xr_pkgs:
+            _log.warning(
+                "Ignoring the following non-XR packages left over after "
+                "grouping:"
+            )
+            for pkg in remaining_non_xr_pkgs:
+                _log.warning("    %s", pkg)
+
+        if remaining_xr_pkgs:
+            raise UngroupedXRPackagesError(remaining_xr_pkgs)
+
+    return groups
+
+
+def get_xr_foundation_package(
+    pkgs: Iterable[_packages.Package],
+) -> Optional[_packages.Package]:
+    """Returns the foundation package (if found)."""
+    for pkg in pkgs:
+        if pkg.name.startswith(_XR_FOUNDATION + "-"):
+            return pkg
+
+    return None
+
+
+def get_xr_required_packages(
+    foundation_pkg: Optional[_packages.Package],
+    pkgs: Iterable[_packages.Package],
+) -> List[_packages.Package]:
+    """Returns all packages required by the specified foundation package."""
+    if not foundation_pkg:
+        _log.info("No foundation package, no known required packages.")
+        return []
+
+    foundation_deps = [dep.name for dep in foundation_pkg.requires]
+
+    tail_str = "-BLOCK"
+    foundation_deps = [
+        dep[: -len(tail_str)] if dep.endswith(tail_str) else dep
+        for dep in foundation_deps
+    ]
+
+    return [pkg for pkg in pkgs if pkg.name in foundation_deps] + [
+        foundation_pkg
+    ]
+
+
+def get_xr_optional_packages(
+    foundation_pkg: Optional[_packages.Package],
+    pkgs: Iterable[_packages.Package],
+    *,
+    required_pkgs: Optional[Iterable[_packages.Package]] = None,
+) -> List[_packages.Package]:
+    """
+    Return all optional RPMs (for XR).
+
+    If required_pkgs is not set, then it is calculated.
+    """
+    if required_pkgs is None:
+        required_pkgs = get_xr_required_packages(foundation_pkg, pkgs)
+
+    _log.info("Required packages: %s", required_pkgs)
+
+    optional_packages = [
+        pkg
+        for pkg in pkgs
+        if pkg not in required_pkgs and is_xr_installable_pkg(pkg)
+    ]
+    _log.info("Optional packages: %s", required_pkgs)
+
+    return optional_packages

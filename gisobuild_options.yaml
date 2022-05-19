@@ -1,0 +1,68 @@
+# Template input yaml file to gisobuild script.
+# Options below correspond to the tool input options.
+# --iso ISO             Path to Mini.iso/golden.iso file
+# --repo REPO [REPO ...]
+#                       Path to list of RPM repositories. RPMs are only used if already
+#                       included in the ISO, or specified by the user via the --pkglist option.
+# --pkglist PKGLIST [PKGLIST ...]
+#                       Optional list of rpm or smu to add to the ISO.
+# --remove-packages REMOVE_PACKAGES [REMOVE_PACKAGES ...]
+#                       Remove named RPMs, specified in a comma separated list. Valid build
+#                       option for LNT only. eXR builds simply ignores this option.
+# --bridging-fixes BRIDGE_FIXES [BRIDGE_FIXES ...]
+#                       Bridging rpms to package. Takes from-release (supported for eXR)
+#                       or rpm names.
+# --xrconfig XRCONFIG   Path to XR config file
+# --ztp-ini ZTP_INI     Path to user ztp ini file
+# --script SCRIPT       Path to user executable script executed as part of
+#                       bootup post activate. Valid build option for eXR only.
+#                       LNT builds simply ignores.
+# --label LABEL         Golden ISO Label
+# --out-directory OUT_DIRECTORY
+#                       Output Directory. Built GISO and logs will be available post gisobuild.
+# --copy-directory COPY_DIRECTORY
+#                       Copy built artefacts to specified directory if provided. Valid build
+#                       option for LNT only. eXR build ignores this option.
+# --yamlfile CLI_YAML   Cli arguments via yaml.
+# --clean               Delete output dir before proceeding.
+# --migration           To build Migration tar only for ASR9k. Valid build option for eXR only.
+#                       LNT builds simply ignore this option.
+# --docker              Load and run pre-built docker image. Valid build option for eXR only.
+#                       LNT builds simply ignore this option.
+# --x86-only            Use only x86_64 rpms even if other architectures are applicable. Valid build
+#                       option for eXR only. LNT builds simply ignore this option.
+# --version             Print version of this script and exit
+
+packages:
+    iso: <path-to-iso>
+    repo: 
+        - <path-to-repo1>
+        - <path-to-repo2>
+    pkglist:
+        - <pkg1>
+        - <pkg2>
+    bridge-fixes:
+        upgrade-from-release:
+            - <dotted-release-1>
+            - <dotted-release-2>
+        rpms:
+            - <pkg1>
+            - <pkg2>
+    remove_packages:
+        - <pkg1>
+        - <pkg2>
+
+user-content:
+    script: <path-to-script-sh>
+    xrconfig: <path-to-router.cfg>
+    ztp-ini: <path-to-ztp.ini>
+
+output:
+    label: <giso-label>
+    out-directory: <path-to-output-directory>
+    clean: <true/false>
+
+options:
+    docker: <true/false>
+    migration: <true/false>
+    x86-only: <true/false>
