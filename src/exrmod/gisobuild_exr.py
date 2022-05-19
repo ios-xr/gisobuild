@@ -38,7 +38,7 @@ def system_resource_check (args):
     import_errors = False
     tools = ['mount', 'rm', 'cp', 'umount', 'zcat', 'chroot', 'mkisofs']
 
-    if args.fullISO:
+    if hasattr(args, 'fullISO') and args.fullISO:
         tools.remove('chroot')
 
     logger.debug("Performing System requirements check...")
@@ -59,7 +59,7 @@ def system_resource_check (args):
         logger.error("Minimum {} GB of free disk space is required "
                      "for building Golden ISO.".format (int(required_space)))
         tools_check_err = True
-    tools_check_err = False
+    #tools_check_err = False
 
     if not tools_check_err:
         for tool in tools:

@@ -18,7 +18,6 @@ or implied.
 """
 
 import sys
-
 try:
     assert sys.version_info >= (3, 6)
 except AssertionError:
@@ -313,12 +312,13 @@ def validate_and_setup_args(args: argparse.Namespace) -> argparse.Namespace:
         args.gisoExtend = False
 
     """ Check if optimized or a full iso build is being triggered. """
-    if args.optimize or args.fullISO:
-        display_string = "Optimized" if args.optimize else "Full ISO"
-        if not OPTIMIZE_CAPABLE:
-            raise AssertionError(
-                f"{display_string} build workflow is not supported."
-            )
+    if hasattr(args, 'optimize') or hasattr(args, 'fullISO'):
+        if args.optimize or args.fullISO:
+            display_string = "Optimized" if args.optimize else "Full ISO"
+            if not OPTIMIZE_CAPABLE:
+                raise AssertionError(
+                    f"{display_string} build workflow is not supported."
+                )
 
     """ Check repo given in input. """
     if args.repo:

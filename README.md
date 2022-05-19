@@ -169,3 +169,11 @@ Output:
 The corresponding GISO and build logs are available under the directory
 specified in `--out-directory`. The default if not specified is
 `<pwd>/output_gisobuild`.
+
+Note:
+
+Legacy eXR python2 based gisobuild utility is available under:
+https://github.com/ios-xr/gisobuild/tree/gisobuild-exr-legacy
+
+command to pull above code base is:
+git clone  --branch gisobuild-exr-legacy https://github.com/ios-xr/gisobuild/
