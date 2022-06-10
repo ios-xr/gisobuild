@@ -1,0 +1,53 @@
+# Template input yaml file to gisobuild script.
+# Options below correspond to the tool input options.
+# --iso ISO             Path to Mini.iso/Full.iso file
+# --repo REPO [REPO ...]
+#                       Path to RPM repository
+# --bridging-fixes BRIDGE_FIXES [BRIDGE_FIXES ...]
+#                       Bridging rpms to package. Takes from-release or rpm
+#                       names.
+# --xrconfig XRCONFIG   Path to XR config file
+# --ztp-ini ZTP_INI     Path to user ztp ini file
+# --label LABEL         Golden ISO Label
+# --out-directory OUT_DIRECTORY
+#                       Output Directory
+# --yamlfile CLI_YAML   Cli arguments via yaml
+# --clean               Delete output dir before proceeding
+# --skip-usb-image      Do not build the USB image
+# --skip-dep-check      Skip dependency checking. Only use if you are sure the
+#                       resulting GISO will be consistent and installable
+# --copy-dir            Copy built artefacts to specified directory if
+#                       provided. The specified directory must already exist,
+#                       be writable by the builder and must not contain a
+#                       previously built artefact with the same name
+# --remove-packages     Remove RPMS for the given package names, specified in
+#                       a comma separated list
+# --remove-rpms-matching-pattern
+#                       Remove RPMs matching the specified pattern.
+#                       Put in quotes e.g. 'pkg*'
+
+packages:
+    iso: /ws/josrose-sjc/files/8000-x64.iso
+    repo:
+        - test/rpms/xr_rpms
+        - test/rpms/os_sdk_rpms/optics-devobj-7.5.1.05Iv1.0.0-r0.corei7_64.rpm
+    bridge-fixes:
+        rpms:
+            - test/rpms/cpa_rpms
+    clear-bridging-fixes: false
+    remove-packages:
+        - xr-bgp
+    remove-rpms-matching-pattern:
+        - xr-routing*
+    skip-usb-image: false
+    skip-dep-check: false
+
+user-content:
+    xrconfig: test/xrconfig
+    ztp-ini: test/ztp.ini
+
+output:
+    label: test_label
+    out-directory: output_gisobuild_yaml
+    clean: true
+    copy-dir: output_gisobuild_yaml_copy
