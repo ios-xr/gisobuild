@@ -171,6 +171,7 @@ class Migtar:
         if os.path.exists(self.EFI):
             run_cmd('rm -rf ' + self.EFI)
 
+        pwd=os.getcwd()
         dst_mpath = os.path.join(pwd, "upgrade_matrix")
         if os.path.exists(dst_mpath):
             shutil.rmtree(dst_mpath)
@@ -2273,7 +2274,7 @@ class Giso:
             fs_root = iso.get_iso_extract_path()
             bootstrap_file = \
                 "%s/"\
-                "/etc/rc.d/init.d/cisco-instance/fretta/calvados_bootstrap.cfg"\
+                "/etc/init.d/cisco-instance/fretta/calvados_bootstrap.cfg"\
                 % fs_root
             search_str = ''
             if os.path.exists(bootstrap_file):
