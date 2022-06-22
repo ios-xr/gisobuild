@@ -153,6 +153,28 @@ def main (argv, infile):
 
         if argv.x86_only:
             giso.is_x86_only = True
+        tpa_rpms = []
+        tpa_repo_path = None
+        if argv.pkglist:
+            combolist = argv.pkglist[:]
+            for pkg in argv.pkglist:
+                if pkg.startswith ("owner-") or pkg.startswith ("partner-"):
+                    tpa_rpms.append (pkg)
+                    combolist.remove (pkg)
+            if combolist:
+                argv.pkglist = combolist
+            else:
+                argv.pkglist = None
+
+            if argv.in_docker:
+                for repo in argv.rpmRepo:
+                    if os.path.basename(repo).startswith("TPA_REPO-"):
+                        if tpa_repo_path == None:
+                            tpa_repo_path = []
+                        tpa_repo_path.append(repo)
+                        argv.rpmRepo.remove(repo)
+            else:
+                tpa_repo_path = argv.rpmRepo
 
         if argv.pkglist:
             giso.pkglist = True
@@ -186,11 +208,12 @@ def main (argv, infile):
         if argv.rpmRepo:
 
             # 1.3.1 Scan repository and build RPM data base.
-            rpm_db.populate_rpmdb(fs_root, argv.rpmRepo, pkglist,
+            rpm_db.populate_rpmdb(fs_root, argv.rpmRepo, pkglist, tpa_rpms,
                  giso.get_bundle_iso_platform_name(),
                  giso.get_bundle_iso_version(),
                  giso.is_full_iso_require,
-                 giso.ExtendRpmRepository)
+                 giso.ExtendRpmRepository,
+                 tpa_repo_path)
 
             # 1.3.2 Seperate Cisco and TP rpms in RPM data base
             rpm_db.populate_tp_cisco_list(giso.get_bundle_iso_platform_name())
@@ -243,6 +266,11 @@ def main (argv, infile):
         if not giso.is_full_iso_require and not giso.is_skip_dep_check:
             giso.set_iso_rpm_key(fs_root)
 
+        #if rpm_db.tpa_rpm_count:
+        #    logger.info("\nFollowing TPA rpm(s) will be used for building Golden ISO:\n")
+        #    list(map(lambda file_name: logger.info("\t(+) %s"
+        #                    % (file_name)), rpm_db.tpa_rpm_list))
+
         # 1.5 Compatability Check
         for vm_type in giso.VM_TYPE:
             supp_arch = giso.get_supp_arch(vm_type)
@@ -271,6 +299,7 @@ def main (argv, infile):
                         continue
                     else:
                         local_card_arch_files = arch_rpm_files
+
 
             # 1.5.1 Scan for missing architecture rpms.
             #       Fretta for example supports x86_64 and Arm.
@@ -325,6 +354,11 @@ def main (argv, infile):
                     logger.info("\n\t...RPM compatibility check [PASS]")
                 else:
                     logger.info("\n\t...RPM compatibility check [SKIPPED]")
+
+        if rpm_db.tpa_rpm_count:
+            logger.info("\nFollowing TPA rpm(s) will be used for building Golden ISO:\n")
+            list(map(lambda file_name: logger.info("\t(+) %s"
+                            % (file_name)), rpm_db.tpa_rpm_list))
 
         if argv.gisoLabel:
             # if -x option is selected for fixed chassis fretta(ncs5500) then

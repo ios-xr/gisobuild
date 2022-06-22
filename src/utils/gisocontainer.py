@@ -444,6 +444,7 @@ def _execute_build(cli_args: argparse.Namespace) -> None:
     log_dir = out_dir / _CTR_LOG_DIR / _get_current_datetime_as_str()
     copy_dir = _canonical_path(cli_args.copy_directory)
     system_resource_check()
+    tpa_repo = container.create_tpa_repo(cli_args)
     infile = system_build_prep_env(cli_args)
     logger.info("Setting up container environment...")
     image = _ensure_image()
@@ -456,6 +457,8 @@ def _execute_build(cli_args: argparse.Namespace) -> None:
         logger.exception("\nGiso Build failed. Stage error logs if available.")
     finally:
         gisoutils.stop_progress()
+        if not tpa_repo:
+            tpa_repo.cleanup()
         try:
             img_dir = _stage_artefacts(out_dir, container_name)
             _subprocs.execute(

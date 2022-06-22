@@ -38,7 +38,12 @@ import pprint
 from utils import gisoutils
 import pathlib
 
-__version__ = '0.37'
+from typing import (
+    Any,
+    List,
+    Tuple,
+)
+
 GISO_PKG_FMT_VER = 1.0
 
 custom_mdata = {
@@ -463,6 +468,8 @@ class Rpmdb:
         self.bundle_iso = Iso()
         self.repo_path = []
         self.rpm_list = []
+        self.tpa_rpm_list = []
+        self.tpa_rpm_count = 0
         self.csc_rpm_list = []
         self.tp_rpm_list = []
         self.csc_rpm_count = 0
@@ -492,6 +499,7 @@ class Rpmdb:
         self.is_full_iso_require = False
         self.is_skip_dep_check = False
         self.tmp_smu_repo_path = []
+        self.tmp_tpa_repo_path = None
 
     @staticmethod
     def get_pre_req_opt_rpm(repo_paths, pkg):
@@ -513,6 +521,34 @@ class Rpmdb:
                 if not re.search('CSC[a-z][a-z]\d{5}', el) and not "-mpls-te-" in el:
                     pre_req_rpm_list.append(el)
         return pre_req_rpm_list
+
+    @staticmethod
+    def validate_and_return_tpalist(
+        repo_paths,
+        tpalist
+    ):
+        """
+        Parse repo path for tpa rpms provided in tpalist.
+
+        :repo_paths:
+            List of repositories to be searched.
+
+        :tpalist:
+            List of tpa rpms to be packaged.
+
+        :return:
+            tmp_tpa_repo, tpa_files where tmp_tpa_repo
+                is staging location for tpa rpms in tpafiles
+        """
+        tpa_files = []
+        tmp_tpa_repo = tempfile.mkdtemp(dir = args.out_directory)
+        for tpa in tpalist:
+            for repo in repo_paths:
+                pkgpath = os.path.join (repo, tpa)
+                if os.path.isfile (pkgpath):
+                    shutil.copy (pkgpath, tmp_tpa_repo)
+                    tpa_files.append (os.path.join (tmp_tpa_repo, tpa))
+        return tmp_tpa_repo, tpa_files
 
     @staticmethod
     def validate_and_return_list(platform, repo_paths, pkglist):
@@ -687,7 +723,18 @@ class Rpmdb:
         logger.debug("\nFile list After Unification [%s] \n" %(repo_files))
         return new_repo_paths, repo_files
 
-    def populate_rpmdb(self, fs_root, repo_paths, pkglist, platform, iso_version, full_iso, eRepo):
+    def populate_rpmdb(
+        self,
+        fs_root: str,
+        repo_paths: List[str],
+        pkglist: List[str],
+        tpalist: List[str],
+        platform: str,
+        iso_version: str,
+        full_iso: bool,
+        eRepo: List[str],
+        tpa_repo_path: List[str] = None
+    ) -> int:
         retval = 0
         repo_files = []
         new_repo_paths = repo_paths
@@ -727,7 +774,7 @@ class Rpmdb:
         else:
             new_repo_paths += self.tmp_smu_repo_path
 
-        if not len(repo_files):
+        if not len(repo_files) and not len(tpalist):
             return 0 
         # if it is gISO extend look at eRepo as well.
         if eRepo is not None:
@@ -736,15 +783,42 @@ class Rpmdb:
         if full_iso:
             self.is_full_iso_require = True
         logger.info("Building RPM Database...")
+
+        # Parse tpalist to package in GISO.
+        if tpalist:
+            self.tmp_tpa_repo_path, tpa_files = \
+                Rpmdb.validate_and_return_tpalist (tpa_repo_path, tpalist)
+            skipped_tpa = []
+            tpa_pkgs_considered = [os.path.basename(file_name) for file_name in tpa_files]
+            for tpa in tpalist:
+                if tpa not in tpa_pkgs_considered:
+                    skipped_tpa.append (tpa)
+
+            if skipped_tpa:
+                logger.info("\nFollowing TPA packages in input for pkglist were "
+                        "not present in the given repositories, "
+                        "Golden ISO build will be aborted...\n")
+                list(map(lambda file_name: logger.info("\t(-) %s"
+                        % os.path.basename(file_name)), skipped_tpa))
+                raise AssertionError ("TPA files {} in pkglist input "
+                                      "unavailable.".format(','.join(skipped_tpa)))
+            else:
+                self.tpa_rpm_list = [os.path.basename(file_name) for file_name in tpa_files]
+                self.tpa_rpm_count = len(self.tpa_rpm_list)
+                new_repo_paths += self.tmp_tpa_repo_path
+
         # creating temporary path to hold user provided rpms and sp's rpms
         pwd=cwd
         self.tmp_repo_path = tempfile.mkdtemp(dir=pwd)      
         for file_name in repo_files:
             result = run_cmd('file -b %s' % file_name)
-            if re.match(".*RPM.*", result["output"]):
+            if (re.match(".*RPM.*", result["output"])):
+                logging.debug("Considering: %s" % (file_name))
                 shutil.copy(file_name, fs_root)
                 shutil.copy(file_name, self.tmp_repo_path)
                 rpm = Rpm()
+                if platform not in file_name:
+                    continue
                 rpm.populate_mdata(fs_root, os.path.basename(file_name), 
                                    self.is_full_iso_require)
                 rpm_name_ver_rel_arch = "%s-%s-%s.%s" % (rpm.name, rpm.version,
@@ -779,7 +853,9 @@ class Rpmdb:
         except:
             self.cleanup_tmp_sp_data()
             
-        logger.info("\nTotal %s RPM(s) present in the repository path provided in CLI" % (len(self.rpm_list)))
+        total_rpm_present = self.tpa_rpm_count + len(self.rpm_list)
+        #logger.info("\nTotal %s RPM(s) present in the repository path provided in CLI" % (len(self.rpm_list)))
+        logger.info("\nTotal %s RPM(s) present in the repository path provided in CLI" % (total_rpm_present))
         self.repo_path = new_repo_paths
        
         return 0
@@ -838,6 +914,10 @@ class Rpmdb:
             list(map(lambda file_name: logger.info("\t(*) %s" % os.path.basename(file_name)), self.vm_sp_rpm_file_paths[XR_SUBSTRING]))
 
         return 0
+
+    def cleanup_tmp_tpa_staging(self) -> None:
+        if self.tmp_tpa_repo_path:
+            shutil.rmtree(self.tmp_tpa_repo_path, ignore_errors=True)
 
     def cleanup_tmp_sp_data(self):
         if self.sp_mount_path and  os.path.exists(self.sp_mount_path):
@@ -1419,6 +1499,10 @@ class Rpmdb:
             count = count + 1
             logger.info("[%2d] %s "%(count,pkg.file_name))
 
+        for pkg in self.tpa_rpm_list :
+            count = count + 1
+            logger.info("[%2d] %s "%(count,pkg))
+
         self.csc_rpm_list = [ latest_smu[key] for key in list(latest_smu.keys()) ]
 
 
@@ -1953,7 +2037,7 @@ class Iso(object):
                 elif 'signature: NOKEY' in line :
                     logger.debug("Ignoring RPM signing ")
                     continue
-                else: 
+                else:
                     err_log.append(line)
             if len(err_log) != 0:
                 logger.error("Error: ")
@@ -2376,7 +2460,7 @@ class Giso:
               return True
         return False
         
-    def prepare_giso_info_txt(self, iso, sp_name):
+    def prepare_giso_info_txt(self, iso, sp_name, tpalist):
         iso_name = iso.get_iso_name()
 
         if "-minik9-" in iso_name or self.k9sec_present:
@@ -2441,6 +2525,12 @@ class Giso:
                         vm_type_meta = SYSADMIN_SUBSTRING.lower()
                     tmp_dict['%s rpms in golden ISO'%(vm_type_meta)] = ' '.join(rpm_files)
                     rpms_list.append(tmp_dict)
+
+            if tpalist:
+                tpadict = {}
+                tpadict['tpa rpms in golden ISO'] = tpalist
+                rpms_list.append (tpadict)
+
             # if sp is present its added to yaml file to be displayed as part of
             # show install package <giso>
             if sp_name is not None:
@@ -2686,6 +2776,7 @@ class Giso:
         pwd = cwd
         rpm_count = 0
         repo = ""
+        tpa_rpmlist = []
         self.giso_dir = "%s/giso_files_dir" % pwd
         if os.path.exists(self.giso_dir):
             shutil.rmtree(self.giso_dir)
@@ -2800,6 +2891,16 @@ class Giso:
                     logger.debug("\nSkipped following duplicate xr rpm from repo\n")
                     list(map(lambda file_name: logger.debug("\t(-) %s" % file_name), duplicate_xr_rpms))
 
+        if rpm_db.tmp_tpa_repo_path:
+            giso_repo_path = pathlib.Path("%s/tpa_rpms" % (self.giso_dir)).resolve()
+            giso_repo_path.mkdir (parents=True, exist_ok=True)
+            logger.info("\nTPA rpms:")
+            for tpa_rpm in glob.glob (rpm_db.tmp_tpa_repo_path + "/*.rpm"):
+                tpa_rpmlist.append (os.path.basename(tpa_rpm))
+                logger.info('\t%s' % (os.path.basename(tpa_rpm)))
+                shutil.copy (tpa_rpm, giso_repo_path)
+            rpm_db.cleanup_tmp_tpa_staging ()
+
         if self.sp_info_path is not None:
             for vm_type in Giso.VM_TYPE:
                 if vm_type ==  SYSADMIN_SUBSTRING:
@@ -2894,7 +2995,7 @@ class Giso:
         else:
             # With all validation done, continue with GISO build.
             iso_matrix_file = None
-            self.prepare_giso_info_txt(self.bundle_iso, rpm_db.latest_sp_name)
+            self.prepare_giso_info_txt(self.bundle_iso, rpm_db.latest_sp_name, tpa_rpmlist)
             self.update_grub_cfg(self.bundle_iso)
             shutil.copy(logfile, '%s/%s' % (self.giso_dir, 
                                             Giso.SMU_CONFIG_SUMMARY_FILE))

@@ -27,6 +27,8 @@ __all__ = (
 import os
 import logging
 import sys
+import re
+import tempfile
 from utils import gisoutils
 from utils import gisoglobals as gglobals
 import pathlib
@@ -120,3 +122,40 @@ def copy_artefacts (
     logger.info (f"Logs copied to {log_dir}")
 
     return
+
+def create_tpa_repo(cli_args: argparse.Namespace) -> tempfile.TemporaryDirectory:
+    tpa_smu_found = False
+    if cli_args.pkglist:
+        for pkg in cli_args.pkglist:
+            if pkg.startswith ("owner-") or pkg.startswith ("partner-"):
+                tpa_smu_found = True
+                break
+    if not tpa_smu_found:
+        return None
+    try:
+        tpa_staging = tempfile.TemporaryDirectory(
+            prefix= "TPA_REPO-", dir= cli_args.out_directory
+        )
+        logger.error("TPA REPO: %s" % (tpa_staging.name))
+        for repo in cli_args.repo:
+            repo = os.path.normpath(repo)
+            ( _, _, files) = tuple(os.walk(repo))[0]
+            for file in files:
+                file_name = file
+                if (
+                    re.search(r"^owner-\S*\.rpm",  file_name) or
+                    re.search(r"^partner-\w+-\S*\.rpm", file_name)
+                ):
+                    logger.info("Copying TPA RPM: %s to %s" % (file,
+                                                        tpa_staging.name))
+                    shutil.copy(os.path.join(repo, file), tpa_staging.name)
+                    os.chmod(os.path.join(tpa_staging.name, file_name), 0o777)
+
+        cli_args.repo.append(tpa_staging.name)
+        return tpa_staging
+    except OSError as OSE:
+        logger.exception("Failed to create temp directory or copy file.")
+        raise OSE
+    except Exception:
+        logger.exception("Some fatal error occured! Exiting ...")
+        sys.exit(1)
