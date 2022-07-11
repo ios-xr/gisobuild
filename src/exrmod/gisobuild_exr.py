@@ -138,11 +138,11 @@ def main (argv, infile):
             giso.is_tar_require = True
 
 
-        if argv.fullISO and giso.get_bundle_iso_platform_name().upper() != "XRV9K":
+        if hasattr(argv, 'fullISO') and argv.fullISO and giso.get_bundle_iso_platform_name().upper() != "XRV9K":
             logger.error("Error: fullISO option is only applicable for XRV9k platform")
             sys.exit(-1)
 
-        if argv.fullISO:
+        if hasattr(argv, 'fullISO') and argv.fullISO:
             logger.info("\nInfo: fullISO option is provided so fullISO will be generated")
             giso.is_full_iso_require = True
 
