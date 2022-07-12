@@ -2883,7 +2883,8 @@ class Giso:
  
         rpm_db.cleanup_tmp_sp_data()
 
-        if plat == "iosxrwbd" and not args.optimize:
+        if plat == "iosxrwbd" and hasattr(args, 'optimize') and not args.optimize:
+
             os.symlink("bzImage", "%s/boot/bzImage_GISO" %(self.giso_dir))
 
         if not (rpms or service_pack or config or script or ztp_ini):
