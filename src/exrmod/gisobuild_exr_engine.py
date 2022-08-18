@@ -956,9 +956,9 @@ class Rpmdb:
         cnbng_rpms = set()
 
         for rpm in self.csc_rpm_list:
-            if "asr9k-bng-x64" in rpm.name:
+            if "-bng" in rpm.name and "-bng-supp" not in rpm.name:
                 bng_rpms |= set([rpm])
-            elif "asr9k-cnbng-x64" in rpm.name:
+            elif "-cnbng" in rpm.name:
                 cnbng_rpms |= set([rpm])
         if len(bng_rpms) and len(cnbng_rpms):
             self.csc_rpm_list = list(set(self.csc_rpm_list) - cnbng_rpms)
@@ -966,7 +966,7 @@ class Rpmdb:
             self.csc_rpm_count = len(self.csc_rpm_list)
 
             if cnbng_rpms:
-                logger.info("\nSkipped following RPM(s) due to conflict with bng-x64 rpms\n")
+                logger.info("\nSkipped following RPM(s) due to conflict with bng rpms\n")
                 for rpm in cnbng_rpms:
                     logger.info("\t(-) %s" % rpm.file_name)
             logger.debug('Found updated %s Cisco RPMs' % self.csc_rpm_count)
@@ -2883,7 +2883,7 @@ class Giso:
  
         rpm_db.cleanup_tmp_sp_data()
 
-        if plat == "iosxrwbd":                                                       
+        if plat == "iosxrwbd":
             if not hasattr (args, 'optimize'):
                 os.symlink("bzImage", "%s/boot/bzImage_GISO" %(self.giso_dir))
             else:
