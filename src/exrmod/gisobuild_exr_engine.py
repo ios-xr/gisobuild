@@ -2137,10 +2137,10 @@ class Giso:
         plat = self.get_bundle_iso_platform_name()
         if self.is_extend_giso:
            self.do_extend_giso(self.bundle_iso.iso_mount_path)
-        if not args.optimize:
+        if hasattr(args, 'optimize') and not args.optimize:
             self.giso_rpm_path = DEFAULT_RPM_PATH
             logger.debug("Golden ISO RPM_PATH: %s" % self.giso_rpm_path)
-        elif args.optimize:
+        elif hasattr(args, 'optimize') and args.optimize:
             if plat in Giso.NESTED_ISO_PLATFORMS :
                 # This was interim change for 651 release for fretta only
                 if "6.5.1." in self.bundle_iso.get_iso_version() or '6.5.1' == self.bundle_iso.get_iso_version():
@@ -2984,8 +2984,12 @@ class Giso:
  
         rpm_db.cleanup_tmp_sp_data()
 
-        if plat == "iosxrwbd" and not args.optimize:
-            os.symlink("bzImage", "%s/boot/bzImage_GISO" %(self.giso_dir))
+        if plat == "iosxrwbd":                                                       
+            if not hasattr (args, 'optimize'):
+                os.symlink("bzImage", "%s/boot/bzImage_GISO" %(self.giso_dir))
+            else:
+                if not args.optimize:
+                    os.symlink("bzImage", "%s/boot/bzImage_GISO" %(self.giso_dir))
 
         if not (rpms or service_pack or config or script or ztp_ini):
             logger.info("Final rpm list or service pack is Zero and "
@@ -3091,7 +3095,7 @@ class Giso:
                                       (self.get_bundle_iso_version() == "7.0.2")):
                self.update_bzimage(self.giso_dir)
 
-            if args.optimize:
+            if hasattr(args, 'optimize') and args.optimize:
                 # If optimised GISO, 
                 # 1. push RPMs in system_image for nested platform
                 #    push RPMS to initrd for non nested platfomr
