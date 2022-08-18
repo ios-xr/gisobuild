@@ -2527,8 +2527,10 @@ class Giso:
                     rpms_list.append(tmp_dict)
 
             if tpalist:
+                f.write("\n\nTPA rpms:\n")
+                f.write('\n'.join(tpalist))
                 tpadict = {}
-                tpadict['tpa rpms in golden ISO'] = tpalist
+                tpadict['tpa rpms in golden ISO'] = ' '.join(tpalist)
                 rpms_list.append (tpadict)
 
             # if sp is present its added to yaml file to be displayed as part of
