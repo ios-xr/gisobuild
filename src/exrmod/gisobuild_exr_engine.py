@@ -1046,7 +1046,7 @@ class Rpmdb:
             self.csc_rpm_count = len(self.csc_rpm_list)
 
             if cnbng_rpms:
-                logger.info("\nSkipped following RPM(s) due to conflict with bng rpms\n")
+                logger.warning("\nWarning: Skipped following RPM(s) due to conflict with bng rpms\n")
                 for rpm in cnbng_rpms:
                     logger.info("\t(-) %s" % rpm.file_name)
             logger.debug('Found updated %s Cisco RPMs' % self.csc_rpm_count)
