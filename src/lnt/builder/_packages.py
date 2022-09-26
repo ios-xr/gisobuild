@@ -37,6 +37,7 @@ import pathlib
 
 from typing import (
     cast,
+    Collection,
     Dict,
     FrozenSet,
     Iterable,
@@ -53,6 +54,7 @@ from xml.etree.ElementTree import Element, ElementTree
 
 import defusedxml.ElementTree as elemtree  # type: ignore
 
+from . import _multiprocessing
 from . import _runrpm
 from .. import gisoutils
 
@@ -492,7 +494,25 @@ class Package:
         )
 
 
-def get_packages_from_rpm_files(filepaths: Iterable[str]) -> List[Package]:
+def _rpm_file_to_rpm_file_and_package(filepath: str) -> Tuple[str, Package]:
+    """
+    Helper function for use with map to wrap Package.from_rpm_file and return
+    both it's input argument and it's output.
+
+    :param filepath:
+        Path to an RPM file.
+
+    :returns:
+        A pair consisting of:
+            - the input 'filepath'
+            - a :class:`.Package` object representing 'filepath'
+    """
+    return filepath, Package.from_rpm_file(filepath)
+
+
+def get_packages_from_rpm_files(
+    filepaths: Collection[str],
+) -> Dict[str, Package]:
     """
     Get a list of packages from a list of RPM file paths.
 
@@ -500,10 +520,15 @@ def get_packages_from_rpm_files(filepaths: Iterable[str]) -> List[Package]:
         List of paths to RPM files to get the package data for.
 
     :return:
-        List of :class:`.Package` objects representing these RPMs.
+        Dictionary mapping the input paths to the :class:`.Package` objects
+        representing them.
 
     """
-    return [Package.from_rpm_file(filepath) for filepath in filepaths]
+    return dict(
+        _multiprocessing.map_helper(
+            _rpm_file_to_rpm_file_and_package, filepaths
+        )
+    )
 
 
 def get_packages_from_repodata(

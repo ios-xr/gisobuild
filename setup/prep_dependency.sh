@@ -18,20 +18,47 @@
 # IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 # or implied.
 #
-if command -v apt-get >/dev/null; then
+
+# Determine what sort of distribution this is
+test -e /etc/os-release && os_release='/etc/os-release' || os_release='/usr/lib/os-release'
+. "${os_release}"
+use_apt=""
+use_rpm=""
+install_epel=""
+case " $ID $ID_LIKE " in
+    *" debian "*)
+        use_apt="y"
+        ;;
+    *" rhel "*)
+        use_rpm="y"
+        install_epel="y"
+        epel_release="${VERSION_ID%%.*}"
+        ;;
+    *" fedora "*)
+        use_rpm="y"
+        ;;
+    *)
+        echo "Distro not supported: need a distro based on RedHat(/Fedora) or Debian(/Ubuntu" 1>&2
+        exit 1
+        ;;
+esac
+
+
+
+if [ -n "$use_apt" ]; then
     # Debian-based distro
     PKGS=(
         cpio
         createrepo-c
         file
         genisoimage
+        gzip
         openssl
+        p7zip-full
         python3
-        python3-defusedxml
         python3-distutils
-        python3-packaging
+        python3-pip
         python3-rpm
-        python3-yaml
         rpm
         squashfs-tools
     )
@@ -41,15 +68,24 @@ if command -v apt-get >/dev/null; then
     if ! test -f /usr/bin/mkisofs; then
         ln -sf /usr/bin/genisoimage /usr/bin/mkisofs
     fi
-elif command -v yum >/dev/null; then
+    PIP_PKGS=(
+        dataclasses
+        defusedxml
+        packaging
+        rpm
+        PyYAML
+    )
+    python3 -m pip install -q --user "${PIP_PKGS[@]}"
+elif [ -n "$use_rpm" ]; then
     # Red Hat based distro
     PKGS=(
         cpio
         createrepo_c
         file
         genisoimage
-        libcdio
+        gzip
         openssl
+        p7zip-plugins
         python3
         python3-pip
         python3-rpm
@@ -57,10 +93,20 @@ elif command -v yum >/dev/null; then
         squashfs-tools
     )
     set -e
+    if [ -n "$install_epel" ]; then
+        yum install -y "https://dl.fedoraproject.org/pub/epel/epel-release-latest-${epel_release}.noarch.rpm"
+    fi
     yum -y install "${PKGS[@]}"
-    python3 -m pip install -q --user PyYAML defusedxml dataclasses packaging
+    PIP_PKGS=(
+        dataclasses
+        defusedxml
+        packaging
+        rpm
+        PyYAML
+    )
+    python3 -m pip install -q --user "${PIP_PKGS[@]}"
 else
-    echo "Distro not supported: neither apt-get nor yum found" >&2
+    echo "Distro not supported: only RedHat/Debian-based distros are supported" >&2
     exit 1
 fi
 

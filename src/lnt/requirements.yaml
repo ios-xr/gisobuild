@@ -1,0 +1,75 @@
+# -----------------------------------------------------------------------------
+# requirements.yaml -- Requirement specification for LNT GISO tools.
+#
+# May 2022, David Hopkins
+#
+# Copyright (c) 2022 by Cisco Systems, Inc.
+# All rights reserved.
+# -----------------------------------------------------------------------------
+base_images:
+  - name: Alma Linux 8
+    from: almalinux:8
+  - name: Fedora 34
+    from: fedora:34  
+  - name: Debian 11.2
+    from: debian:11.2-slim
+  # As mentioned in FS, Ubuntu 20.04 does not have createrepo_c available 
+  # in the standard repos
+  # - name: Ubuntu 20.04
+  #   from: ubuntu:20.04
+
+executable_requirements:
+  - name: python3
+    min_version: "3.6"
+    package_names:
+      - python3
+      - python3-pip
+    apt_get_names:
+      - python3-distutils
+  - name: rpm
+    min_version: "4.14"
+    package_names:
+      - rpm
+      - python3-rpm
+  - name: cpio
+    min_version: "2.10"
+  - name: gzip
+    min_version: "1.9"
+  - name: createrepo_c
+    apt_get_names: 
+      - createrepo-c
+  - name: file
+  - name: isoinfo
+    package_names:
+      - genisoimage
+  - name: mkisofs
+    package_names:
+      - genisoimage
+  - name: mksquashfs
+    package_names:
+      - squashfs-tools
+  - name: openssl
+  - name: unsquashfs
+    package_names:
+      - squashfs-tools
+  - name: 7z
+    optional: true
+    yum_names:
+      - p7zip-plugins
+    apt_get_names:
+      - p7zip-full
+          
+
+
+python_modules:
+  - name: dataclasses
+  - name: defusedxml
+  - name: distutils
+    # This is part of python's standard library so shouldn't be pip installed.
+    # Debian may require it to be installed separately from python3 though so
+    # we still want to check it is present, but don't want to pip install it.
+    skip_install: True
+  - name: packaging
+  - name: rpm
+  - name: yaml
+    pip_name: PyYAML
