@@ -943,7 +943,7 @@ def _field_can_be_missing(field: "dataclasses.Field[Any]") -> bool:
     """
     return (
         field.default is not dataclasses.MISSING
-        or field.default_factory is not dataclasses.MISSING  # type: ignore
+        or field.default_factory is not dataclasses.MISSING
     )
 
 
@@ -1040,7 +1040,7 @@ def _validate(raw_data: Dict[str, Any], ctx: _Context) -> Any:
                 if field.default is not dataclasses.MISSING:
                     data[field.name] = field.default
 
-                elif field.default_factory is not dataclasses.MISSING:  # type: ignore
+                elif field.default_factory is not dataclasses.MISSING:
                     data[field.name] = field.default_factory()
 
                 else:

@@ -98,11 +98,25 @@ def parsecli() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--no-label",
+        action="store_true",
+        help="Indicates that no label at all should be added to the GISO"
+    )
+
+    parser.add_argument(
         "--out-directory",
         dest="out_directory",
         type=str,
         default=os.path.join(os.path.abspath(os.getcwd()), "output_gisobuild"),
         help="Output Directory",
+    )
+
+    parser.add_argument(
+        "--create-checksum",
+        dest="create_checksum",
+        default=False,
+        help="Write a file with the checksum and size of the output file(s)",
+        action="store_true",
     )
 
     parser.add_argument(
@@ -373,7 +387,12 @@ def validate_and_setup_args(args: argparse.Namespace) -> argparse.Namespace:
             )
 
     """ Check input label if provided. """
-    if not args.label:
+    if args.no_label:
+        logger.info(
+            "Info: User has requested a Golden ISO with no label"
+        )
+        args.label = None
+    elif not args.label:
         logger.info(
             "Info: Golden ISO label is not specified so defaulting to 0"
         )

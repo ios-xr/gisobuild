@@ -78,7 +78,9 @@ EXR_CLI_DICT_MAP = {
     "ztp_ini": "ztp_ini",
     "script": "script",
     "label": "gisoLabel",
+    "no_label": "no_label",
     "out_directory": "out_directory",
+    "create_checksum": "create_checksum",
     "cli_yaml": "cli_yaml",
     "clean": "out_clean",
     "migration": "migTar",
@@ -113,7 +115,9 @@ LNT_CLI_DICT_MAP = {
     "skip_dep_check": "skip_dep_check",
     "ztp_ini": "ztp_ini",
     "label": "label",
+    "no_label": "no_label",
     "out_directory": "out_dir",
+    "create_checksum": "create_checksum",
     "copy_directory": "copy_dir",
     "clean": "clean",
     "bridge_fixes": "bridging_fixes",
@@ -137,11 +141,14 @@ LNT_CLI_DICT_MAP = {
     "image_script": "image_script",
 }
 
+# Name of JSON checksum file
+CHECKSUM_FILE_NAME = "checksums.json"
+
 # Container globals.
 # This image version *MUST* be updated whenever the built container changes
 # (e.g. Dockerfile change).
 IMAGE_NAME = "cisco-xr-gisobuild"
-IMAGE_VERSION = "2.2.0"
+IMAGE_VERSION = "2.3.3"
 
 CTR_OUT_DIR = pathlib.Path(
     tempfile.TemporaryDirectory(prefix="output_gisobuild-").name

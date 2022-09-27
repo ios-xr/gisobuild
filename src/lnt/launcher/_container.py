@@ -40,6 +40,7 @@ from utils import gisoutils
 from utils import gisoglobals as gglobals
 from .. import gisoutils as lnt_utils
 
+
 logger = logging.getLogger("launcher")
 
 
@@ -80,6 +81,7 @@ def system_resource_prep(args: argparse.Namespace) -> str:
     # Set the location of where the build artefacts should be placed inside the
     # conatiner
     args_dict["out_directory"] = str(_CTR_OUT_DIR)
+    args_dict["create_checksum"] = True
 
     # Generate build info metadata outside of docker environment
     buildinfo_mdata = lnt_utils.generate_buildinfo_mdata()
@@ -157,6 +159,7 @@ def copy_artefacts(
         shutil.copy2(item, output_dir)
         artefacts_to_copy.append(str(item))
     print(f"Build artefacts copied to {output_dir}")
+    gisoutils.verify_checksums(str(output_dir), gglobals.CHECKSUM_FILE_NAME)
     if copy_dir is not None:
         lnt_utils.copy_artefacts_to_dir(artefacts_to_copy, str(copy_dir))
         print(f"Build artefacts copied to {copy_dir}")
