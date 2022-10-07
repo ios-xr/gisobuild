@@ -172,20 +172,25 @@ class Output:
     Representation of output options specified in YAML.
     """
 
-    label: str = ""
+    label: Optional[str] = None
     out_directory: str = ""
     copy_directory: Optional[str] = None
     clean: bool = False
+    create_checksum: bool = False
+    no_label: bool = False
 
     @classmethod
     def from_dict(cls, ydict: Dict[str, Any]) -> "Output":
         """Create an Output class from a dictionary."""
-        label = ""
+        label = None
         out_directory = ""
         copy_directory = None
         clean = False
+        create_checksum = False
+        no_label = False
+
         if ydict:
-            label = ydict.get("label", "")
+            label = ydict.get("label", None)
 
             # The arguments appear as out-directory in the yaml file but
             # out_directory in the args namespace
@@ -201,6 +206,13 @@ class Output:
             elif ydict.get("copy_dir"):
                 copy_directory = ydict.get("copy_dir")
             clean = ydict.get("clean", False)
+            if ydict.get("no_label"):
+                no_label = ydict.get("no_label", False)
+
+            if ydict.get("create-checksum"):
+                create_checksum = ydict.get("create-checksum", False)
+            elif ydict.get("create_checksum"):
+                create_checksum = ydict.get("create_checksum", False)
 
         return validate.create(
             cls,
@@ -209,6 +221,8 @@ class Output:
                 "out_directory": out_directory,
                 "copy_directory": copy_directory,
                 "clean": clean,
+                "create_checksum": create_checksum,
+                "no_label": no_label,
             },
         )
 

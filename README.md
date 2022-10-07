@@ -6,12 +6,15 @@
 usage: gisobuild.py [-h] [--iso ISO] [--repo REPO [REPO ...]]
                     [--bridging-fixes BRIDGE_FIXES [BRIDGE_FIXES ...]]
                     [--xrconfig XRCONFIG] [--ztp-ini ZTP_INI] [--label LABEL]
-                    [--out-directory OUT_DIRECTORY] [--yamlfile CLI_YAML] [--clean]
-                    [--pkglist PKGLIST [PKGLIST ...]] [--script SCRIPT] [--docker]
-                    [--x86-only] [--migration]
+                    [--no-label] [--out-directory OUT_DIRECTORY]
+                    [--create-checksum] [--yamlfile CLI_YAML] [--clean]
+                    [--pkglist PKGLIST [PKGLIST ...]] [--script SCRIPT]
+                    [--docker] [--x86-only] [--migration] [--optimize]
+                    [--full-iso]
                     [--remove-packages REMOVE_PACKAGES [REMOVE_PACKAGES ...]]
                     [--skip-usb-image] [--copy-dir COPY_DIRECTORY]
                     [--clear-bridging-fixes] [--verbose-dep-check] [--debug]
+                    [--isoinfo ISOINFO] [--image-script IMAGE_SCRIPT]
                     [--version]
 
 Utility to build Golden ISO for IOS-XR.
@@ -20,57 +23,73 @@ optional arguments:
   -h, --help            show this help message and exit
   --iso ISO             Path to Mini.iso/Full.iso file
   --repo REPO [REPO ...]
-                        Path to RPM repository. For LNT, user can specify .rpm, .tgz,
-                        .tar filenames, or directories. RPMs are only used if already
-                        included in the ISO, or specified by the user via the
-                        --pkglist option.
+                        Path to RPM repository. For LNT, user can specify
+                        .rpm, .tgz, .tar filenames, or directories. RPMs are
+                        only used if already included in the ISO, or specified
+                        by the user via the --pkglist option.
   --bridging-fixes BRIDGE_FIXES [BRIDGE_FIXES ...]
-                        Bridging rpms to package. For EXR, takes from-release or rpm
-                        names; for LNT, the user can specify the same file types as for
-                        the --repo option.
+                        Bridging rpms to package. For EXR, takes from-release
+                        or rpm names; for LNT, the user can specify the same
+                        file types as for the --repo option.
   --xrconfig XRCONFIG   Path to XR config file
   --ztp-ini ZTP_INI     Path to user ztp ini file
   --label LABEL, -l LABEL
                         Golden ISO Label
+  --no-label            Indicates that no label at all should be added to the
+                        GISO
   --out-directory OUT_DIRECTORY
                         Output Directory
+  --create-checksum     Write a file with the checksum and size of the output
+                        file(s)
   --yamlfile CLI_YAML   Cli arguments via yaml
   --clean               Delete output dir before proceeding
   --pkglist PKGLIST [PKGLIST ...]
-                        Packages to be added to the output GISO. For eXR: optional rpm
-                        or smu to package. For LNT: either full package filenames or
-                        package names for user installable packages can be specified.
-                        Full package filenames can be specified to choose a particular
-                        version of a package, the rest of the block that the package is
-                        in will be included as well. Package names can be specified to
-                        include optional packages in the output GISO.
+                        Packages to be added to the output GISO. For eXR:
+                        optional rpm or smu to package. For LNT: either full
+                        package filenames or package names for user
+                        installable packages can be specified. Full package
+                        filenames can be specified to choose a particular
+                        version of a package, the rest of the block that the
+                        package is in will be included as well. Package names
+                        can be specified to include optional packages in the
+                        output GISO.
   --docker, --use-container
-                        Build GISO in container environment.Pulls and run pre-built
-                        container image to build GISO.
+                        Build GISO in container environment.Pulls and run pre-
+                        built container image to build GISO.
   --version             Print version of this script and exit
 
 EXR only build options:
-  --script SCRIPT       Path to user executable script executed as part of bootup post
-                        activate.
+  --script SCRIPT       Path to user executable script executed as part of
+                        bootup post activate.
   --x86-only            Use only x86_64 rpms even if other architectures are
                         applicable.
   --migration           To build Migration tar only for ASR9k
+  --optimize            Optimize GISO by recreating and resigning initrd
+  --full-iso            To build full iso only for xrv9k
 
 LNT only build options:
   --remove-packages REMOVE_PACKAGES [REMOVE_PACKAGES ...]
-                        Remove RPMs, specified in a comma separated list. These are are
-                        matched against user installable package names, and must be the
-                        whole package name, e.g: xr-bgp
+                        Remove RPMs, specified in a comma separated list.
+                        These are matched against user installable package
+                        names, and must be the whole package name, e.g: xr-bgp
   --skip-usb-image      Do not build the USB image
   --copy-dir COPY_DIRECTORY
-                        Copy built artefacts to specified directory if provided. The
-                        specified directory must already exist, be writable by the
-                        builder and must not contain a previously built artefact with
-                        the same name.
+                        Copy built artefacts to specified directory if
+                        provided. The specified directory must already exist,
+                        be writable by the builder and must not contain a
+                        previously built artefact with the same name.
   --clear-bridging-fixes
                         Remove all bridging bugfixes from the input ISO
   --verbose-dep-check   Verbose output for the dependency check.
   --debug               Output debug logs to console
+  --isoinfo ISOINFO     User specified isoinfo executable to use instead of
+                        the default version
+  --image-script IMAGE_SCRIPT
+                        User specified image.py script to be used for
+                        packing/unpacking instead of the version extracted
+                        from the ISO. It will not be inserted into the GISO.
+                        Intended for debugging purposes only.
+
 ```
 
 ## Description
@@ -89,16 +108,18 @@ a new version of IOS-XR.
 ## Requirements
 
 This tool has the following executable requirements:
-* python >= 3.6
+* python3 >= 3.6
 * rpm >= 4.14
 * cpio >= 2.10
 * gzip >= 1.9
 * createrepo_c
+* file
 * isoinfo
 * mkisofs
 * mksquashfs
 * openssl
 * unsquashfs
+* 7z (Optional - but functionality may be reduced without)
 
 It also requires the following Python (>= 3.6) modules:
 * dataclasses
@@ -116,8 +137,9 @@ and the ability to pull the published 'cisco-xr-gisobuild' image from Docker
 Hub, in which case the above dependencies are met by the published image.
 
 To run natively on a Linux host, the following distributions have been tested.
+* Alma Linux 8
+* Fedora 34
 * Debian 11.2
-* Rocky Linux 8
 
 On a native Linux system, which does not have all dependencies met,
 the tool dependencies can be installed on supported distributions above
@@ -170,10 +192,13 @@ The corresponding GISO and build logs are available under the directory
 specified in `--out-directory`. The default if not specified is
 `<pwd>/output_gisobuild`.
 
-Note:
 
-Legacy eXR python2 based gisobuild utility is available under:
-https://github.com/ios-xr/gisobuild/tree/gisobuild-exr-legacy
+# Note: older version of the tool
 
-command to pull above code base is:
-git clone  --branch gisobuild-exr-legacy https://github.com/ios-xr/gisobuild/
+The legacy eXR python2-based gisobuild utility is available at:
+
+ https://github.com/ios-xr/gisobuild/tree/gisobuild-exr-legacy
+
+The command to pull the above code base is:
+
+    git clone  --branch gisobuild-exr-legacy https://github.com/ios-xr/gisobuild/

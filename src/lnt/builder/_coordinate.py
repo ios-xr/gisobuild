@@ -49,6 +49,8 @@ from typing import (
 )
 
 
+from utils import gisoutils as ggisoutils
+from utils import gisoglobals as gglobals
 from . import _blocks
 from . import _file
 from . import _packages
@@ -252,7 +254,7 @@ def _prelim_checks(args: argparse.Namespace) -> None:
 
     """
 
-    if re.match(r"^[\w_]+$", str(args.label)) is None:
+    if args.label and re.match(r"^[\w_]+$", str(args.label)) is None:
         # The label should be alphanumeric except for underscores
         raise InvalidLabelError(args.label)
 
@@ -465,14 +467,13 @@ def _get_package_info_from_groups(
         - Mapping from package string to RPM path
         - Mapping from RPM path to package object
     """
-    rpm_mapping = {}
-    package_mapping = {}
-    for group in groups:
-        rpms = _file.get_group_rpms(iso_dir, group)
-        for rpm in rpms:
-            package = _packages.Package.from_rpm_file(rpm)
-            package_mapping[rpm] = package
-            rpm_mapping[str(package)] = rpm
+    rpms = [
+        rpm for group in groups for rpm in _file.get_group_rpms(iso_dir, group)
+    ]
+    package_mapping = _packages.get_packages_from_rpm_files(rpms)
+    rpm_mapping = {
+        str(package): rpm for rpm, package in package_mapping.items()
+    }
 
     return (rpm_mapping, package_mapping)
 
@@ -599,8 +600,8 @@ def _coordinate_bridging(
     packages_to_add = []
     add_rpm_mapping = {}
     version_errors = set()
-    for rpm in rpms_to_add:
-        package = _packages.Package.from_rpm_file(rpm)
+    rpms_to_packages = _packages.get_packages_from_rpm_files(rpms_to_add)
+    for rpm, package in rpms_to_packages.items():
         if package.version.xr_version == iso_version:
             version_errors.add(rpm)
         packages_to_add.append(package)
@@ -761,7 +762,9 @@ def _coordinate_pkgs(
     _log.debug("Getting repo packages")
     repo_pkg_paths = _get_rpms("group", repo, tmp_dir)
     repo_dirs = [os.path.dirname(p) for p in repo_pkg_paths]
-    repo_pkgs = _packages.get_packages_from_rpm_files(repo_pkg_paths)
+    repo_pkgs = list(
+        _packages.get_packages_from_rpm_files(repo_pkg_paths).values()
+    )
     _log.debug("Packages in the repos:")
     for pkg in sorted(repo_pkgs, key=str):
         _log.debug("  %s", str(pkg))
@@ -943,9 +946,12 @@ def _coordinate_giso(
     if args.label is not None:
         label += "-{}".format(args.label)
 
+    files_to_checksum = set()
+
     iso_name = f"{platform_golden}{arch}{xr_version}{label}.iso"
     iso_image.pack_iso(out_dir, iso_name)
     _log.info("Output to %s", str(os.path.join(out_dir, iso_name)))
+    files_to_checksum.add(iso_name)
 
     iso_file = os.path.join(out_dir, iso_name)
     if not os.path.exists(iso_file):
@@ -956,15 +962,26 @@ def _coordinate_giso(
         usb_name = f"{platform_golden}{arch}-usb_boot{xr_version}{label}.zip"
         usb_file = os.path.join(out_dir, usb_name)
         iso_image.build_usb_image(iso_file, usb_file)
+        files_to_checksum.add(usb_name)
 
     # Update permissions following ISO creation
     os.chmod(out_dir, 0o755)
+
+    # Create checksum file, if requested
+    checksum_file = None
+    if args.create_checksum:
+        checksum_file = gglobals.CHECKSUM_FILE_NAME
+        ggisoutils.create_checksum_file(
+            out_dir, files_to_checksum, checksum_file,
+        )
 
     if args.copy_dir:
         _log.debug("Copying GISO to %s", args.copy_dir)
         copy_arts = [iso_file]
         if usb_file is not None and os.path.exists(usb_file):
             copy_arts.append(usb_file)
+        if checksum_file is not None and os.path.exists(checksum_file):
+            copy_arts.append(checksum_file)
         gisoutils.copy_artefacts_to_dir(copy_arts, args.copy_dir)
 
     return (iso_file, usb_file)

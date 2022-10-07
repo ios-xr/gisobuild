@@ -22,6 +22,7 @@ __all__ = ("CheckFailuresError", "run")
 
 
 import contextlib
+import functools
 import logging
 import pathlib
 import tempfile
@@ -30,6 +31,7 @@ from typing import (
     Iterator,
     List,
     Mapping,
+    Optional,
     Sequence,
     Set,
     Union,
@@ -37,6 +39,7 @@ from typing import (
 
 
 from . import _blocks
+from . import _multiprocessing
 from . import _packages
 from . import _runrpm
 
@@ -143,134 +146,154 @@ class _VerifyDependenciesError(Exception):
         self.output = output
 
 
-class _Checker:
-    """Class to run the various checks and store the output."""
+@contextlib.contextmanager
+def _init_rpm_db() -> Iterator[pathlib.Path]:
+    """Initialize a temporary directory to use as an RPM database."""
+    with tempfile.TemporaryDirectory(prefix="rpm_checks_db_") as tmp_dir:
+        db_dir = pathlib.Path(tmp_dir)
+        yield db_dir
 
-    def __init__(self) -> None:
-        """Initialize the class."""
-        self._dependency_failures: List[str] = []
 
-    @contextlib.contextmanager
-    def _init_rpm_db(self) -> Iterator[pathlib.Path]:
-        """Initialize a temporary directory to use as an RPM database."""
-        with tempfile.TemporaryDirectory(prefix="rpm_checks_db_") as tmp_dir:
-            db_dir = pathlib.Path(tmp_dir)
-            yield db_dir
-
-    def verify_dependencies(
-        self, pid: str, pkgs: Sequence[pathlib.Path]
-    ) -> None:
-        """
-        Call rpm to verify the dependencies of the given packages.
+def _verify_dependencies(
+    pid: str,
+    pid_pkgs: Set[_packages.Package],
+    pkg_to_file: Mapping[_packages.Package, pathlib.Path],
+) -> Optional[_VerifyDependenciesError]:
+    """
+        Call rpm to verify the dependencies of the given packages
 
         :param pid:
-            The name of the PID that the dependencies are being verified for.
+             The name of the PID that the dependencies are being verified for.
 
-        :param pkgs:
-            The paths to the set of packages to check.
-
-        """
-
-        # Check if the set of rpms will install. If it succeeds then there's
-        # nothing more to do. If it fails then do some filtering of error
-        # messages if required before outputting them.
-        with self._init_rpm_db() as db_dir:
-            try:
-                _runrpm.check_install(db_dir, pkgs)
-            except _runrpm.CheckInstallError as e:
-                raise _VerifyDependenciesError(pid, e.exc.output) from e
-
-    def _pkg_has_invalid_signature(
-        self, pkg_path: pathlib.Path, db_dir: pathlib.Path
-    ) -> bool:
-        """
-        Check if the given package has an invalid signature.
-
-        :param pkg_path:
-            Path to the package to check.
-
-        :return:
-            True if it doesn't have the correct signatures, False otherwise.
-
-        """
-        _logger.debug("Verifying signature for %s", str(pkg_path))
-        try:
-            output = _runrpm.check_signature(db_dir, pkg_path)
-        except _runrpm.CheckSignatureError:
-            # If the command fails then add the package as a failure
-            return True
-        else:
-            # The command can still succeed even if the package doesn't
-            # have the correct signatures. The command only checks the
-            # signatures present in the RPM match the imported keys, so if
-            # the RPM isn't signed at all then the command will succeed.
-            # If the appropriate signature type is not in the output then
-            # this is an error.
-            #
-            # Pylint errors with unsupported-membership-test for the below:
-            #   "Value 'output' doesn't support membership test"
-            # even though 'output' is a string. Calling str on it silences the
-            # warning.
-            if "RSA/SHA256 Signature" not in str(output):
-                return True
-
-        return False
-
-    def _import_key(
-        self, filename: str, key: str, db_dir: pathlib.Path
-    ) -> None:
-        """
-        Create the key file and import it to the RPM database.
-
-        :param filename:
-            The filename to write the key to.
-
-        :param key:
-            The key to write to the file.
-
-        """
-        key_file = db_dir / filename
-        with open(key_file, "w") as f:
-            f.write(key)
-
-        _runrpm.import_key(db_dir, key_file)
-
-    def verify_signatures(
-        self,
-        pkgs: Set[_packages.Package],
-        pkg_to_file: Mapping[_packages.Package, pathlib.Path],
-        dev_signed: bool,
-    ) -> None:
-        """
-        Verify the signatures of the given packages.
-
-        :param pkgs:
-            The set of packages to verify signatures for.
+        :param pid_pkgs:
+            The paths to the set of packages on 'pid'.
 
         :param pkg_to_file:
-            A mapping of package to filepath.
+            Mapping of package to the filepath on disk.
 
-        :param dev_signed:
-            Boolean indicating whether the input ISO was dev- or rel-signed. If
-            it's dev-signed then only check against the dev key and same for
-            rel-signed.
-
+        :returns:
+            A _VerifyDependenciesError if the depedencies are not met, else None
         """
+    pid_pkg_paths = {pkg_to_file[pkg] for pkg in pid_pkgs}
+    _logger.debug("Checking dependencies for PID %s", pid)
+    with _init_rpm_db() as db_dir:
+        try:
+            _runrpm.check_install(db_dir, sorted(pid_pkg_paths))
+        except _runrpm.CheckInstallError as e:
+            return _VerifyDependenciesError(pid, e.exc.output)
 
-        if dev_signed:
-            key_filename = "dev.gpg"
-            key = _GPG_DEV
-        else:
-            key_filename = "rel.gpg"
-            key = _GPG_REL
-        failures = set()
-        with self._init_rpm_db() as db_dir:
-            self._import_key(key_filename, key, db_dir)
-            for pkg in sorted(pkgs, key=str):
-                if self._pkg_has_invalid_signature(pkg_to_file[pkg], db_dir):
-                    failures.add(pkg)
-        if failures:
-            raise _VerifySignaturesError(failures)
+    return None
+
+
+def _pkg_has_invalid_signature(
+    pkg: _packages.Package,
+    pkg_to_file: Mapping[_packages.Package, pathlib.Path],
+    db_dir: pathlib.Path,
+) -> Optional[_packages.Package]:
+    """
+    Check if the given package has an invalid signature.
+
+    :param pkg
+        The package to verify signatures for.
+
+    :param pkg_to_file:
+        A mapping of package to filepath.
+
+    :param db_dir
+        Directory to use as an RPM database.
+
+    :returns:
+        'pkg' if the package has an invalid signature, None otherwise.
+    """
+    pkg_path = pkg_to_file[pkg]
+
+    _logger.debug("Verifying signature for %s", str(pkg_path))
+    try:
+        output = _runrpm.check_signature(db_dir, pkg_path)
+    except _runrpm.CheckSignatureError:
+        # If the command fails then add the package as a failure
+        return pkg
+    else:
+        # The command can still succeed even if the package doesn't
+        # have the correct signatures. The command only checks the
+        # signatures present in the RPM match the imported keys, so if
+        # the RPM isn't signed at all then the command will succeed.
+        # If the appropriate signature type is not in the output then
+        # this is an error.
+        #
+        # Pylint errors with unsupported-membership-test for the below:
+        #   "Value 'output' doesn't support membership test"
+        # even though 'output' is a string. Calling str on it silences the
+        # warning.
+        if "RSA/SHA256 Signature" not in str(output):
+            return pkg
+
+    return None
+
+
+def _import_key(filename: str, key: str, db_dir: pathlib.Path) -> None:
+    """
+    Create the key file and import it to the RPM database.
+
+    :param filename:
+        The filename to write the key to.
+
+    :param key:
+        The key to write to the file.
+
+    """
+    key_file = db_dir / filename
+    with open(key_file, "w") as f:
+        f.write(key)
+
+    _runrpm.import_key(db_dir, key_file)
+
+
+def _verify_signatures(
+    pkgs: Set[_packages.Package],
+    pkg_to_file: Mapping[_packages.Package, pathlib.Path],
+    dev_signed: bool,
+) -> None:
+    """
+    Verify the signatures of the given packages.
+
+    :param pkgs:
+        The set of packages to verify signatures for.
+
+    :param pkg_to_file:
+        A mapping of package to filepath.
+
+    :param dev_signed:
+        Boolean indicating whether the input ISO was dev- or rel-signed. If
+        it's dev-signed then only check against the dev key and same for
+        rel-signed.
+
+    """
+
+    if dev_signed:
+        key_filename = "dev.gpg"
+        key = _GPG_DEV
+    else:
+        key_filename = "rel.gpg"
+        key = _GPG_REL
+    failures = set()
+    with _init_rpm_db() as db_dir:
+        _import_key(key_filename, key, db_dir)
+
+        possible_failures = _multiprocessing.map_helper(
+            functools.partial(
+                _pkg_has_invalid_signature,
+                pkg_to_file=pkg_to_file,
+                db_dir=db_dir,
+            ),
+            sorted(pkgs, key=str),
+        )
+        for possible_failure in possible_failures:
+            if possible_failure is not None:
+                failures.add(possible_failure)
+
+    if failures:
+        raise _VerifySignaturesError(failures)
 
 
 def _fmt_depcheck_error(
@@ -413,23 +436,22 @@ def run(
         Boolean indicating whether the input ISO was dev or rel signed.
 
     """
-    checker = _Checker()
-
     errors: List[Union[_VerifyDependenciesError, _VerifySignaturesError]] = []
+
     # Run the dependency checking per PID. A different set of packages is
     # installed on each pid so we need to perform the dependency check for
     # each set of packages on each pid individually.
     pid_to_pkgs = pkgs.get_pkgs_per_pid()
-    for pid, pid_pkgs in sorted(pid_to_pkgs.items()):
-        pid_pkg_paths = {pkg_to_file[pkg] for pkg in pid_pkgs}
-        _logger.debug("Checking dependencies for PID %s", pid)
-        try:
-            checker.verify_dependencies(pid, sorted(pid_pkg_paths))
-        except _VerifyDependenciesError as e:
-            errors.append(e)
+    possible_errors = _multiprocessing.starmap_helper(
+        functools.partial(_verify_dependencies, pkg_to_file=pkg_to_file),
+        sorted(pid_to_pkgs.items()),
+    )
+    for possible_error in possible_errors:
+        if possible_error is not None:
+            errors.append(possible_error)
 
     try:
-        checker.verify_signatures(pkgs.get_all_pkgs(), pkg_to_file, dev_signed)
+        _verify_signatures(pkgs.get_all_pkgs(), pkg_to_file, dev_signed)
     except _VerifySignaturesError as e:
         errors.append(e)
 

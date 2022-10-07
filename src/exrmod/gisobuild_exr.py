@@ -19,6 +19,10 @@ or implied.
 """
 
 from exrmod.gisobuild_exr_engine import *
+from utils import gisoutils
+from utils import gisoglobals as gglobals
+import hashlib
+import json
 import os
 import logging
 import sys
@@ -364,12 +368,17 @@ def main (argv, infile):
         if argv.gisoExtend:
            giso.do_extend_clean(giso.ExtendRpmRepository)
         rpm_db.cleanup_tmp_repo_path()
+        files_to_checksum = set()
         if not result:
             logger.info('\n\t...Golden ISO creation SUCCESS.')
             logger.info('\nGolden ISO Image Location: %s/%s' %
                         (cwd, giso.giso_name))
-            with open('img_built_name.txt',"w") as f:
+            img_name_file = 'img_built_name.txt'
+            with open(img_name_file, "w") as f:
                 f.write(giso.giso_name)
+            files_to_checksum.add(giso.giso_name)
+            files_to_checksum.add(img_name_file)
+            files_to_checksum.add("rpms_packaged_in_giso.txt")
         if giso.is_tar_require:
             with Migtar() as migtar:
                 logger.info('\nBuilding Migration tar...')
@@ -377,4 +386,7 @@ def main (argv, infile):
                 logger.info('\nMigration tar creation SUCCESS.')
                 logger.info('\nMigration tar Location: %s/%s' %
                             (cwd, migtar.dst_system_tar))
+                files_to_checksum.add(migtar.dst_system_tar)
+        if argv.create_checksum:
+            gisoutils.create_checksum_file(cwd, files_to_checksum, gglobals.CHECKSUM_FILE_NAME)
         sys.exit(0)
