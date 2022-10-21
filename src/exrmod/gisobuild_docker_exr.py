@@ -53,6 +53,10 @@ def system_resource_prep (args):
     args_dict["out_directory"] = str(_CTR_OUT_DIR)
     args_dict["create_checksum"] = True
     
+    ''' if x86_only option is supplied to build GISO with x86_64 rpm only '''
+    if args.x86_only:
+        args_dict["x86_only"] = True
+
     ''' Copy the giso config, ztp.ini and script to temp staging. '''
     if args.xrconfig:
         shutil.copy (args.xrconfig, tempdir)

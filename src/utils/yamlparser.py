@@ -262,7 +262,7 @@ class Options:
             migration = ydict.get("migration", False)
             optimize = ydict.get("optimize", False)
             fullISO = ydict.get("full-iso", False)
-            x86_only = ydict.get("x86-only", False)
+            x86_only = ydict.get("x86_only", False)
             isoinfo = ydict.get("isoinfo", None)
             image_script = ydict.get("image_script", None)
 
