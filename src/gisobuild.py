@@ -437,7 +437,7 @@ def main() -> None:
             {
                 x: y
                 for x, y in cli_args.__dict__.items()
-                if cli_args.__dict__[x] and x not in yaml_args.keys()
+                if cli_args.__dict__[x]
             }
         )
         cli_args.__dict__.update(yaml_args)
