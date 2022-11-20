@@ -230,7 +230,26 @@ def _unpack_tgz(tgz_file: str, tmp_dir: str) -> str:
     _log.debug("Unpacking %s into %s", tgz_file, output)
 
     with tarfile.open(tgz_file, "r:gz") as tgz:
-        tgz.extractall(output)
+        def is_within_directory(directory, target):
+            
+            abs_directory = os.path.abspath(directory)
+            abs_target = os.path.abspath(target)
+        
+            prefix = os.path.commonprefix([abs_directory, abs_target])
+            
+            return prefix == abs_directory
+        
+        def safe_extract(tar, path=".", members=None, *, numeric_owner=False):
+        
+            for member in tar.getmembers():
+                member_path = os.path.join(path, member.name)
+                if not is_within_directory(path, member_path):
+                    raise Exception("Attempted Path Traversal in Tar File")
+        
+            tar.extractall(path, members, numeric_owner=numeric_owner) 
+            
+        
+        safe_extract(tgz, output)
 
     return output
 
@@ -259,7 +278,26 @@ def _unpack_tar(tar_file: str, tmp_dir: str) -> str:
     _log.debug("Unpacking %s into %s", tar_file, output)
 
     with tarfile.open(tar_file, "r") as tar:
-        tar.extractall(output)
+        def is_within_directory(directory, target):
+            
+            abs_directory = os.path.abspath(directory)
+            abs_target = os.path.abspath(target)
+        
+            prefix = os.path.commonprefix([abs_directory, abs_target])
+            
+            return prefix == abs_directory
+        
+        def safe_extract(tar, path=".", members=None, *, numeric_owner=False):
+        
+            for member in tar.getmembers():
+                member_path = os.path.join(path, member.name)
+                if not is_within_directory(path, member_path):
+                    raise Exception("Attempted Path Traversal in Tar File")
+        
+            tar.extractall(path, members, numeric_owner=numeric_owner) 
+            
+        
+        safe_extract(tar, output)
 
     return output
 
