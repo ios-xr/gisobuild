@@ -178,12 +178,20 @@ def display_build_info(iso: image.Image, *, print_json: bool = False) -> None:
         Print the output in JSON format
 
     """
+    _NO_ISO_STRING = "Could not find label in ISO"
     json_data = iso.query_content()
 
     if isoglobals.LNT_GISO_LABEL not in json_data["mdata"].keys():
-        label = iso.show_label()
-        if "Could not find label in ISO" not in label:
-            json_data["mdata"][isoglobals.LNT_GISO_LABEL] = label
+        try:
+            label = iso.show_label()
+        except image.ImageScriptExecutionError as exc:
+            # If the exception was just because there was no label in the ISO,
+            # then continue; otherwise, raise the exception.
+            if _NO_ISO_STRING not in str(exc):
+                raise
+        else:
+            if _NO_ISO_STRING not in label:
+                json_data["mdata"][isoglobals.LNT_GISO_LABEL] = label
     # Populate any missing fields from buildinfo
     json_data["mdata"] = _parse_buildinfo(
         iso.show_buildinfo(), json_data["mdata"],

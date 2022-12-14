@@ -18,9 +18,12 @@ or implied.
 
 """
 
+import hashlib
+import json
 import shutil
 import sys
 import os
+import textwrap
 import logging
 from logging import handlers
 import datetime
@@ -31,6 +34,9 @@ from typing import (
     Any,
     Union,
     Dict,
+    List,
+    Tuple,
+    Iterable,
 )
 from . import gisoglobals
 from . import _subprocs
@@ -185,3 +191,120 @@ def is_platform_exr(iso: str) -> bool:
         ) from error
 
     return is_exr
+
+
+def verify_checksums(path: str, checksum_file: str) -> None:
+    """Verify checksums match the files"""
+
+    errors = []
+    print("Verifying checksums...")
+
+    # Load the checksums
+    sum_data = {}
+    try:
+        with open(os.path.join(path, checksum_file), "r") as f:
+            file_data = f.read()
+        if len(file_data) == 0:
+            errors.append(f"Checksum file '{checksum_file}' is empty")
+        else:
+            try:
+                sum_data = json.loads(file_data)
+            except json.JSONDecodeError as e:
+                errors.append(
+                    f"Could not read checksums from '{checksum_file}'"
+                    " - does not contain valid JSON"
+                )
+    except IOError as e:
+        errors.append(f"Could not read checksum file '{checksum_file}': {e}")
+
+    for filename in sorted(sum_data.keys()):
+        errors.extend(
+            verify_file_checksum(
+                path,
+                filename,
+                sum_data[filename]["length"],
+                sum_data[filename]["sha256"],
+            )
+        )
+
+    if errors:
+        print(
+            textwrap.dedent(
+                """
+              ERROR: File checksums could not be verified. The ISO produced
+                     may be corrupt.
+
+                     This can be caused by the disk becoming full part way
+                     through the creation process; some container software
+                     silently corrupts files in this case.
+
+                     Try freeing up more disk space and trying again.
+
+              Details:
+              """
+            )
+        )
+        for error in errors:
+            print(error)
+        sys.exit(1)
+    else:
+        print("Checksums OK")
+
+
+def verify_file_checksum(
+    path: str, filename: str, expected_length: int, expected_hash: str
+) -> List[str]:
+    """Verify the length and checksum of a file match what is expected"""
+    result = []
+    try:
+        actual_hash, actual_length = get_file_hash_length(
+            os.path.join(path, filename)
+        )
+    except IOError as e:
+        result.append(f"Could not read '{filename}' to verify checksum: {e}")
+    else:
+        if actual_length != expected_length:
+            result.append(
+                f"File '{filename}' has size {actual_length} bytes (should be {expected_length})"
+                + (
+                    " (It may have been truncated)"
+                    if actual_length < expected_length
+                    else ""
+                )
+            )
+        elif actual_hash != expected_hash:
+            result.append(
+                f"Hash for file '{filename}' is incorrect - file is likely to have been corrupted. (Expected {expected_hash}, got {actual_hash})"
+            )
+    return result
+
+
+def get_file_hash_length(filename: str) -> Tuple[str, int]:
+    """Return the SHA256 hash and length of the file with the given name"""
+    with open(filename, "rb") as f:
+        checksum = hashlib.sha256()
+        length = 0
+        keep_going = True
+        while keep_going:
+            data = f.read(4096)
+            checksum.update(data)
+            length += len(data)
+            if len(data) == 0:
+                keep_going = False
+    return checksum.hexdigest(), length
+
+
+def create_checksum_file(
+    directory: str, files_to_checksum: Iterable[str], checksum_file: str
+) -> None:
+    """Create a JSON file with checksums of the given files"""
+    checksum_data = {}
+    for file_to_checksum in files_to_checksum:
+        full_path = os.path.join(directory, file_to_checksum)
+        checksum, length = get_file_hash_length(full_path)
+        checksum_data[file_to_checksum] = {
+            "sha256": checksum,
+            "length": length,
+        }
+    with open(os.path.join(directory, checksum_file), "w") as f:
+        json.dump(checksum_data, f)

@@ -53,7 +53,12 @@ def system_resource_prep (args):
     args_dict ["clean"] = False
     args_dict ["in_docker"] = True
     args_dict["out_directory"] = str(_CTR_OUT_DIR)
+    args_dict["create_checksum"] = True
     
+    ''' if x86_only option is supplied to build GISO with x86_64 rpm only '''
+    if args.x86_only:
+        args_dict["x86_only"] = True
+
     ''' Copy the giso config, ztp.ini and script to temp staging. '''
     if args.xrconfig:
         shutil.copy (args.xrconfig, tempdir)
@@ -106,11 +111,11 @@ def copy_artefacts (
     src_log_dir = src_dir / _CTR_LOG_DIR
     log_dir.mkdir(parents=True, exist_ok=True)
     import re
-    re_list = [".*.txt", ".*-golden.*"]
+    re_list = [".*\.txt", "checksums\.json", ".*-golden.*"]
     artifact_reg = re.compile( '|'.join( re_list) )
     tmp_artifact_dir = src_dir
     for item in tmp_artifact_dir.iterdir():
-        if artifact_reg.match (item.name):
+        if artifact_reg.fullmatch(item.name):
             shutil.copy2(item, out_dir)
 
     logger.info (f"Build artefacts copied to {out_dir}")
@@ -120,6 +125,8 @@ def copy_artefacts (
             shutil.copy2 (item, log_dir)
 
     logger.info (f"Logs copied to {log_dir}")
+
+    gisoutils.verify_checksums(out_dir, gglobals.CHECKSUM_FILE_NAME)
 
     return
 

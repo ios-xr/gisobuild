@@ -434,6 +434,8 @@ def _execute_build(cli_args: argparse.Namespace) -> None:
     else:
         from lnt.launcher import _container as container  # type: ignore
 
+    logger.debug("Running with: %s", cli_args)
+
     system_resource_check = _system_resource_check
     system_build_prep_env = container.system_resource_prep
     system_build_main = _main
