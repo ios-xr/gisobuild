@@ -26,9 +26,9 @@ __all__ = (
 
 import os
 import logging
-import sys
-import re
-import tempfile
+#import sys
+#import re
+#import tempfile
 from utils import gisoutils
 from utils import gisoglobals as gglobals
 import pathlib
@@ -130,6 +130,7 @@ def copy_artefacts (
 
     return
 
+"""
 def create_tpa_repo(cli_args: argparse.Namespace) -> tempfile.TemporaryDirectory:
     tpa_smu_found = False
     if cli_args.pkglist:
@@ -166,3 +167,4 @@ def create_tpa_repo(cli_args: argparse.Namespace) -> tempfile.TemporaryDirectory
     except Exception:
         logger.exception("Some fatal error occured! Exiting ...")
         sys.exit(1)
+"""

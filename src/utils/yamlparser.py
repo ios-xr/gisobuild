@@ -37,6 +37,7 @@ class Packages:
     pkglist: List[str]
     remove_packages: List[str]
     remove_rpms_matching_pattern: List[str]
+    key_requests: List[str]
     bridge_fixes: List[str]
     skip_usb_image: bool
     skip_dep_check: bool
@@ -53,6 +54,7 @@ class Packages:
         remove_packages: List[str] = []
         remove_rpms_matching_pattern: List[str] = []
         bridge_fixes: List[str] = []
+        key_requests: List[str] = []
         skip_usb_image = False
         skip_dep_check = False
         clear_bridging_fixes = False
@@ -61,6 +63,7 @@ class Packages:
             iso = ydict.get("iso", "")
             repo = ydict.get("repo", [])
             pkglist = ydict.get("pkglist", [])
+            key_requests = ydict.get("key_requests", [])
 
             # The arguments appear as remove-packages in the yaml file but
             # remove_packages in the args namespace
@@ -115,6 +118,7 @@ class Packages:
                 "iso": iso,
                 "repo": repo,
                 "pkglist": pkglist,
+                "key_requests": key_requests,
                 "remove_packages": remove_packages,
                 "remove_rpms_matching_pattern": remove_rpms_matching_pattern,
                 "skip_usb_image": skip_usb_image,

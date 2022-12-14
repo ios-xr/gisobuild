@@ -94,6 +94,7 @@ EXR_CLI_DICT_MAP = {
     "exriso": "exriso",
     "pkglist": "pkglist",
     "bridge_fixes": "bridge_fixes",
+    "key_requests": "key_requests",
     "remove_packages": None,
     "skip_usb_image": None,
     "skip_dep_check": None,

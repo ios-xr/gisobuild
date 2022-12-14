@@ -2090,6 +2090,7 @@ class Giso:
     NESTED_ISO_PLATFORMS = ["ncs5500", "ncs560", "ncs540", "iosxrwbd"]
     GISO_SCRIPT = "autorun"
     ISO_RPM_KEY ="(none)"
+    KEY_DIR = "key_requests"
     def __init__(self):
         self.repo_path = None
         self.bundle_iso = None
@@ -2098,6 +2099,7 @@ class Giso:
         self.vm_rpm_file_paths = {"XR": None, "CALVADOS": None, "HOST": None}
         self.xrconfig = None
         self.ztp_ini = None
+        self.key_repo = None
         self.system_image = None
         self.supp_archs = {'HOST': ['x86_64'], 'CALVADOS': ['x86_64'],
                            'XR': ['x86_64']}
@@ -2303,6 +2305,9 @@ class Giso:
 
     def set_script(self, script):
         self.script = script
+
+    def set_key_repo(self, key_repo):
+        self.key_repo = key_repo
 
     @staticmethod
     def is_platform_supported(platform):
@@ -2532,6 +2537,11 @@ class Giso:
                 tpadict = {}
                 tpadict['tpa rpms in golden ISO'] = ' '.join(tpalist)
                 rpms_list.append (tpadict)
+
+            if self.key_repo:
+                f.write("\n\nKey Requests:\n")
+                for key in self.key_repo:
+                    f.write("%s %s\n" % (self.key_request_md5s[key], os.path.basename(key)))
 
             # if sp is present its added to yaml file to be displayed as part of
             # show install package <giso>
@@ -2962,6 +2972,19 @@ class Giso:
             ztp_ini_md5sum = result["output"].split(" ")[0]
             logger.debug("Md5sum of ztp_ini: %s" %(ztp_ini_md5sum))
             self.set_ztp_ini_md5sum(ztp_ini_md5sum)
+
+        if self.key_repo:
+            logger.info("\nKey Request Files:")
+            os.mkdir("%s/%s" % (self.giso_dir, Giso.KEY_DIR))
+            self.key_request_md5s = {}
+            for key in self.key_repo:
+                logger.info("\t%s" % (os.path.basename(key)))
+                shutil.copy(key, "%s/%s" % (self.giso_dir, Giso.KEY_DIR))
+                cmd = "md5sum %s" % (key)
+                result = run_cmd(cmd)
+                key_md5sum = result["output"].split(" ")[0]
+                logger.debug("md5sum: %s %s" % (os.path.basename(key), key_md5sum))
+                self.key_request_md5s[key] = key_md5sum
 
         if self.sp_info_path:
             #logger.info('\t%s' % self.sp_info_path)

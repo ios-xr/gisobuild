@@ -35,6 +35,7 @@ import secrets
 import shutil
 import sys
 import tempfile
+import re
 
 from typing import (
     Iterator,
@@ -119,6 +120,63 @@ def _system_resource_check() -> None:
 
     logger.debug("Found working container tool: %s", _containertool)
 
+def create_tpa_repo(cli_args: argparse.Namespace) -> tempfile.TemporaryDirectory:
+    tpa_smu_found = False
+    if cli_args.pkglist:
+        for pkg in cli_args.pkglist:
+            if pkg.startswith ("owner-") or pkg.startswith ("partner-"):
+                tpa_smu_found = True
+                break
+    if not tpa_smu_found:
+        return None
+    try:
+        tpa_staging = tempfile.TemporaryDirectory(
+            prefix= "TPA_REPO-", dir= cli_args.out_directory
+        )
+        logger.error("TPA REPO: %s" % (tpa_staging.name))
+        for repo in cli_args.repo:
+            repo = os.path.normpath(repo)
+            ( _, _, files) = tuple(os.walk(repo))[0]
+            for file in files:
+                file_name = file
+                if (
+                    re.search(r"^owner-\S*\.rpm",  file_name) or
+                    re.search(r"^partner-\w+-\S*\.rpm", file_name)
+                ):
+                    logger.info("Copying TPA RPM: %s to %s" % (file,
+                                                        tpa_staging.name))
+                    shutil.copy(os.path.join(repo, file), tpa_staging.name)
+                    os.chmod(os.path.join(tpa_staging.name, file_name), 0o777)
+
+        cli_args.repo.append(tpa_staging.name)
+        return tpa_staging
+    except OSError as OSE:
+        logger.exception("Failed to create temp directory or copy file.")
+        raise OSE
+    except Exception:
+        logger.exception("Some fatal error occured! Exiting ...")
+        sys.exit(1)
+
+def _create_tpa_key_repo(cli_args: argparse.Namespace) -> tempfile.TemporaryDirectory:
+    if len(cli_args.key_requests):
+        k_staging = tempfile.TemporaryDirectory(
+            prefix="TPA_KEY_REPO-", dir=cli_args.out_directory
+        )
+        logger.error("TPA KEY REPO: {}".format(k_staging.name))
+        key_files = []
+        for k_pkg in cli_args.key_requests:
+            shutil.copy(k_pkg, k_staging.name)
+            os.chmod(
+                os.path.join(k_staging.name, os.path.basename(k_pkg)), 0o777
+            )
+            key_files.append(
+                os.path.join(k_staging.name, os.path.basename(k_pkg))
+            )
+        cli_args.key_requests = key_files
+        cli_args.repo.append(k_staging.name)
+        return k_staging
+    else:
+        return None
 
 def _get_volumes_to_mount(args: argparse.Namespace, infile: str) -> List[str]:
     """
@@ -446,7 +504,8 @@ def _execute_build(cli_args: argparse.Namespace) -> None:
     log_dir = out_dir / _CTR_LOG_DIR / _get_current_datetime_as_str()
     copy_dir = _canonical_path(cli_args.copy_directory)
     system_resource_check()
-    tpa_repo = container.create_tpa_repo(cli_args)
+    tpa_repo = create_tpa_repo(cli_args)
+    tpa_key_repo = _create_tpa_key_repo(cli_args)
     infile = system_build_prep_env(cli_args)
     logger.info("Setting up container environment...")
     image = _ensure_image()
@@ -459,8 +518,10 @@ def _execute_build(cli_args: argparse.Namespace) -> None:
         logger.exception("\nGiso Build failed. Stage error logs if available.")
     finally:
         gisoutils.stop_progress()
-        if not tpa_repo:
+        if tpa_repo:
             tpa_repo.cleanup()
+        if tpa_key_repo:
+            tpa_key_repo.cleanup()
         try:
             img_dir = _stage_artefacts(out_dir, container_name)
             _subprocs.execute(

@@ -140,6 +140,18 @@ def parsecli() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--key-requests",
+        dest="key_requests",
+        required=False,
+        nargs="+",
+        default=[],
+        help=(
+            "TPA key pkgs to be added to the output GISO. "
+            "For eXR: optional gpg key packages. "
+        ),
+    )
+
+    parser.add_argument(
         "--pkglist",
         dest="pkglist",
         required=False,
@@ -385,6 +397,16 @@ def validate_and_setup_args(args: argparse.Namespace) -> argparse.Namespace:
                 "Init script {} "
                 "has an invalid file type.".format(args.script)
             )
+
+    """ Check if TPA key package is provided. """
+    if args.key_requests:
+        for key_request in args.key_requests:
+            if not os.path.isfile(key_request):
+                raise AssertionError(
+                    "Key request file: {} doesn't exist".format(key_request)
+                )
+        args.key_requests = [os.path.abspath(k_req) for k_req in args.key_requests]
+
 
     """ Check input label if provided. """
     if args.no_label:

@@ -180,6 +180,11 @@ def main (argv, infile):
             else:
                 tpa_repo_path = argv.rpmRepo
 
+        if argv.in_docker:
+            for repo in argv.rpmRepo:
+                if os.path.basename(repo).startswith("TPA_KEY_REPO-"):
+                    argv.rpmRepo.remove(repo)
+
         if argv.pkglist:
             giso.pkglist = True
             pkglist=argv.pkglist
@@ -363,6 +368,12 @@ def main (argv, infile):
             logger.info("\nFollowing TPA rpm(s) will be used for building Golden ISO:\n")
             list(map(lambda file_name: logger.info("\t(+) %s"
                             % (file_name)), rpm_db.tpa_rpm_list))
+
+        if len(argv.key_requests):
+            logger.info("Following key requests will be encapsulated in Golden ISO:")
+            for k_pkg in argv.key_requests:
+                logger.info("\t\t (+) {}".format(os.path.basename(k_pkg)))
+            giso.set_key_repo(argv.key_requests)
 
         if argv.gisoLabel:
             # if -x option is selected for fixed chassis fretta(ncs5500) then
