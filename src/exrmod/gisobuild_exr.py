@@ -96,35 +96,9 @@ def pick_latest_TPA(cli_args):
     if TPA rpms are found in the pkglist pick the latest one in repo,
     even though the user may have specified an outdated one.
     '''
-    def get_all_tpa_rpms(repos):
-        tpa_rpm_paths = []
-        for repo in repos:
-            tpa_rpm_paths.extend(
-                glob.glob(f"{repo}/owner-*.rpm")
-            )
-            tpa_rpm_paths.extend(
-                glob.glob(f"{repo}/partner-*.rpm")
-            )
-        return tpa_rpm_paths
-
-    def get_name_version(rpm_path):
-        name_cmd = "rpm -qp --qf '%%{NAME}' %s" % (rpm_path)
-        version_cmd = "rpm -qp --qf '%%{VERSION}' %s" % (rpm_path)
-        name = run_cmd(name_cmd)["output"]
-        version = run_cmd(version_cmd)["output"]
-        return name, version
-
-    def get_name_from_pkg(pkg_name, rpm_paths):
-        for rpm_path in rpm_paths:
-            if pkg_name == os.path.basename(rpm_path):
-                name, _ = get_name_version(rpm_path)
-                return name
-        logger.warning(
-            "[WARNING] Unable to find %s in the given repo. Will try to pick the latest available",
-            pkg_name
-        )
+    def get_name_ver_from_pkg(pkg_name):
         parts = pkg_name.split("-")
-        return f"{parts[0]}-{parts[1]}"
+        return f"{parts[0]}-{parts[1]}", f"{parts[2]}"
 
     def get_latest(versions):
         latest = "0"
@@ -135,37 +109,21 @@ def pick_latest_TPA(cli_args):
                 latest = ver
         return latest
 
-    def prune_superseeded(rpms_info:dict):
-        for pkg, info in rpms_info.copy().items():
-            versions = info.keys()
-            latest = get_latest(versions)
-            rpms_info[pkg] = info[latest]
-
     if not cli_args.pkglist:
         return
-    repos = []
-    if not cli_args.in_docker:
-        repos.extend(cli_args.rpmRepo)
-    else:
-        repos.extend(
-            [repo for repo in cli_args.rpmRepo \
-                if os.path.basename(repo).startswith("TPA_REPO-")]
-        )
-    all_tpa_rpms = get_all_tpa_rpms(repos)
-    all_rpms_info = {}
-    for rpm in all_tpa_rpms:
-        name, version = get_name_version(rpm)
-        if name not in all_rpms_info:
-            all_rpms_info[name] = {}
-        all_rpms_info[name][version] = rpm
-    prune_superseeded(all_rpms_info)
-    TPA_rpms_in_pkglist = set()
+
+    TPA_rpms_in_pkglist = {}
     for pkg in cli_args.pkglist[:]:
         if pkg.startswith ("owner-") or pkg.startswith ("partner-"):
-            name = get_name_from_pkg(pkg, all_tpa_rpms)
-            TPA_rpms_in_pkglist.add(os.path.basename(all_rpms_info[name]))
+            name, ver = get_name_ver_from_pkg(pkg)
+            if name not in TPA_rpms_in_pkglist:
+                TPA_rpms_in_pkglist[name] = (ver,pkg)
+            else:
+                latest_ver = get_latest([ver, TPA_rpms_in_pkglist[name][0]])
+                if latest_ver == ver:
+                    TPA_rpms_in_pkglist[name] = (ver, pkg)
             cli_args.pkglist.remove(pkg)
-    cli_args.pkglist.extend(list(TPA_rpms_in_pkglist))
+    cli_args.pkglist.extend([f[1] for f in TPA_rpms_in_pkglist.values()])
     logger.info("Updated pkglist: %s", cli_args.pkglist)
 
 def main (argv, infile):
