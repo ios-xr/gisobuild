@@ -45,7 +45,8 @@ optional arguments:
   --clean               Delete output dir before proceeding
   --pkglist PKGLIST [PKGLIST ...]
                         Packages to be added to the output GISO. For eXR:
-                        optional rpm or smu to package. For LNT: either full
+                        optional rpm or smu to package. TPA(non-cisco) rpm can
+                        also be provided in this option. For LNT: either full
                         package filenames or package names for user
                         installable packages can be specified. Full package
                         filenames can be specified to choose a particular
@@ -53,6 +54,8 @@ optional arguments:
                         package is in will be included as well. Package names
                         can be specified to include optional packages in the
                         output GISO.
+  --key-requests KREQLIST [KREQLIST...]
+                        Key Requests to be added to the Output GISO.
   --docker, --use-container
                         Build GISO in container environment.Pulls and run pre-
                         built container image to build GISO.
