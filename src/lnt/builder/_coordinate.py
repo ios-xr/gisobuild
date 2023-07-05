@@ -53,6 +53,7 @@ from utils import gisoutils as ggisoutils
 from utils import gisoglobals as gglobals
 from . import _blocks
 from . import _file
+from . import _isoformat
 from . import _packages
 from . import _pkgchecks
 from . import _pkgpicker
@@ -748,13 +749,19 @@ def _coordinate_pkgs(
 
     """
     _log.debug("Getting input ISO packages")
-    install_groups = gisoutils.get_groups_with_attr(mdata["groups"], "install")
+    installable_group_set = set()
+    for attr in _isoformat.INSTALLABLE_PKG_GROUP_ATTRS:
+        installable_group_set.update(
+            gisoutils.get_groups_with_attr(mdata["groups"], attr)
+        )
+    installable_groups = list(installable_group_set)
+
     iso_dirs = [
         _file.get_group_package_dir(out_dir, group)
-        for group in install_groups
+        for group in installable_groups
         if os.path.exists(_file.get_group_package_dir(out_dir, group))
     ]
-    iso_pkgs = _get_pkgs_from_groups(out_dir, install_groups)
+    iso_pkgs = _get_pkgs_from_groups(out_dir, installable_groups)
     _log.debug("Packages in the input ISO:")
     for pkg in sorted(iso_pkgs, key=str):
         _log.debug("  %s", str(pkg))
@@ -778,12 +785,14 @@ def _coordinate_pkgs(
     repo_blocks = _blocks.group_packages(set(repo_pkgs) | non_xr_iso_pkgs)
 
     _log.debug("Picking packages to go into main part of the GISO")
-    giso_blocks = _pkgpicker.pick_main_pkgs(
+    giso_blocks = _pkgpicker.pick_installable_pkgs(
         iso_blocks, repo_blocks, pkglist, remove_packages
     )
     _log.debug("Packages picked to go in the GISO:")
-    for pkg in sorted(giso_blocks.get_all_pkgs(), key=str):
-        _log.debug("  %s", str(pkg))
+    for group in _isoformat.PackageGroup:
+        _log.debug("  Group %s", str(group))
+        for pkg in sorted(giso_blocks.get_all_pkgs(group), key=str):
+            _log.debug("    %s", str(pkg))
 
     pkg_to_file = _packages.packages_to_file_paths(
         repo_pkgs + iso_pkgs, [*iso_dirs, *repo_dirs]
@@ -791,14 +800,21 @@ def _coordinate_pkgs(
 
     if not skip_dep_check:
         _log.debug("Performing dependency and signature checks")
-        _pkgchecks.run(giso_blocks, pkg_to_file, verbose_dep_check, dev_signed)
+        key_type = (
+            _pkgchecks.KeyType.DEV if dev_signed else _pkgchecks.KeyType.REL
+        )
+        _pkgchecks.run(giso_blocks, pkg_to_file, verbose_dep_check, key_type)
 
     for action in _pkgpicker.determine_output_actions(
         giso_blocks, iso_blocks, pkg_to_file, mdata
     ):
         action.run(out_dir)
 
-    return list(giso_blocks.get_all_pkgs())
+    return list(
+        pkg
+        for group in _isoformat.PackageGroup
+        for pkg in giso_blocks.get_all_pkgs(group)
+    )
 
 
 def _coordinate_giso(
@@ -905,21 +921,17 @@ def _coordinate_giso(
         with open(label_file, "w") as lbl:
             lbl.write(args.label)
         _file.add_package(
-            out_dir,
-            file_to_add=label_file,
-            file_type=_file.FileTypeEnum.LABEL,
+            out_dir, file_to_add=label_file, file_type=_file.FileType.LABEL,
         )
     if args.xrconfig:
         _file.add_package(
             out_dir,
             file_to_add=args.xrconfig,
-            file_type=_file.FileTypeEnum.CONFIG,
+            file_type=_file.FileType.CONFIG,
         )
     if args.ztp_ini:
         _file.add_package(
-            out_dir,
-            file_to_add=args.ztp_ini,
-            file_type=_file.FileTypeEnum.ZTP,
+            out_dir, file_to_add=args.ztp_ini, file_type=_file.FileType.ZTP,
         )
 
     # Update ISO metadata
@@ -930,7 +942,7 @@ def _coordinate_giso(
     with open(mdata_file, "w") as mdata_f:
         mdata_f.write(json_mdata)
     _file.add_package(
-        out_dir, file_to_add=mdata_file, file_type=_file.FileTypeEnum.MDATA,
+        out_dir, file_to_add=mdata_file, file_type=_file.FileType.MDATA,
     )
 
     # Now that all desired files and packages have been added/removed repack

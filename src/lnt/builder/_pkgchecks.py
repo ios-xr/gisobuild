@@ -22,6 +22,7 @@ __all__ = ("CheckFailuresError", "run")
 
 
 import contextlib
+import enum
 import functools
 import logging
 import pathlib
@@ -39,12 +40,21 @@ from typing import (
 
 
 from . import _blocks
+from . import _isoformat
 from . import _multiprocessing
 from . import _packages
 from . import _runrpm
 
 
 _logger = logging.getLogger(__name__)
+
+
+class KeyType(enum.Enum):
+    """Types of key with which RPMs may be signed"""
+
+    DUMMY = enum.auto()
+    DEV = enum.auto()
+    REL = enum.auto()
 
 
 # Hardcoded keys for RPM signature checking
@@ -103,6 +113,39 @@ EeFf9478GDE0PsxBzUj37MXPBi4LGDdnB/U1fsW6H0K+faMuYP+Alg==
 -----END PGP PUBLIC KEY BLOCK-----
 """
 
+_GPG_DUMMY = """
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: GnuPG v2.0.22 (GNU/Linux)
+
+mI0EYw4skQEEANT3uzAUUR8Cul7/EKyCsBybpCL2Mj95skTeYZmgEAfOfRSsbiuf
+oY5+R1ge0j/5SZlTxj13zA4PqZCKGSxRZXZrY3hxbNXSV1SA3FJunLRGz2nirWWw
+xgpRDZMwG+0zZEi6P1t3N1g2vvBRzVfg4pUZs5QrqPGmzU3t8BKtlq6TABEBAAG0
+SER1bW15IEtleSAoRHVtbXkga2V5IGZvciB0ZXN0IHB1cnBvc2VzLCBkbyBub3Qg
+dXNlKSA8ZG9ub3R1c2VAY2lzY28uY29tPoi5BBMBAgAjBQJjDiyRAhsDBwsJCAcD
+AgEGFQgCCQoLBBYCAwECHgECF4AACgkQmXDiVJeSktCOfgQA0o3ssfwXjRwRt/2P
+WsWioaHzlXW/F1YowQNjrvvxXaQfv1xzqT6GBiFgVgeNoUlNixRJmMxwnXdHlZMk
+v6RCCJEWNwaY2pBByNblL2A1zaopCIQW2LXyy+KILXpwBoJpJ7QfaD3jahUJxFae
+7wGJR5vfZvlBxP0OmWkaaxi5wkq4jQRjDiyRAQQA2ALoiXWoRs09tl7JkYIa5k/w
++U4jpwzQt3mWGGvd1Ws2gSTf+2TorOxssEup6U9JJ+vevgFChWjAaqN/q6+pDS/u
+GPQgYS+n2g+rjTyZtZauYFjrAYtMfkgEJsi6Jo216QcuKgwi+Ao09vonfLuyoxUu
+Z7+n4ed9x2oRp//Tje8AEQEAAYifBBgBAgAJBQJjDiyRAhsMAAoJEJlw4lSXkpLQ
+MvID/R+pGoTtBQJTfEEmT0m/XNI9by3JzA/L6IWBiH8qf4drP7LjqPTFS2muaQSx
+wNGSCHGaEEpxzsaqium5WaCuY4o062jY2YCtjSiL+BiB7+p4OeH47N3ALkNecJfP
+QNFokRClFJc6J/M7tyD13r39DurnAyf7zz8QAWAXRW1KExMC
+=6Wp3
+-----END PGP PUBLIC KEY BLOCK-----
+"""
+
+_GPG_KEY_FOR = {
+    KeyType.REL: _GPG_REL,
+    KeyType.DEV: _GPG_DEV,
+    KeyType.DUMMY: _GPG_DUMMY,
+}
+_KEY_FILENAME_FOR = {
+    KeyType.REL: "rel.gpg",
+    KeyType.DEV: "dev.gpg",
+    KeyType.DUMMY: "dummy.gpg",
+}
 
 _LOG_BREAK = "-" * 80
 
@@ -252,7 +295,7 @@ def _import_key(filename: str, key: str, db_dir: pathlib.Path) -> None:
 def _verify_signatures(
     pkgs: Set[_packages.Package],
     pkg_to_file: Mapping[_packages.Package, pathlib.Path],
-    dev_signed: bool,
+    sig_type: KeyType,
 ) -> None:
     """
     Verify the signatures of the given packages.
@@ -263,19 +306,13 @@ def _verify_signatures(
     :param pkg_to_file:
         A mapping of package to filepath.
 
-    :param dev_signed:
-        Boolean indicating whether the input ISO was dev- or rel-signed. If
-        it's dev-signed then only check against the dev key and same for
-        rel-signed.
+    :param sig_type:
+        Which key the package was signed with (and should be checked against)
 
     """
 
-    if dev_signed:
-        key_filename = "dev.gpg"
-        key = _GPG_DEV
-    else:
-        key_filename = "rel.gpg"
-        key = _GPG_REL
+    key_filename = _KEY_FILENAME_FOR[sig_type]
+    key = _GPG_KEY_FOR[sig_type]
     failures = set()
     with _init_rpm_db() as db_dir:
         _import_key(key_filename, key, db_dir)
@@ -411,7 +448,7 @@ def run(
     pkgs: _blocks.GroupedPackages,
     pkg_to_file: Mapping[_packages.Package, pathlib.Path],
     verbose_depcheck: bool,
-    dev_signed: bool,
+    sig_type: KeyType,
 ) -> None:
     """
     Check the dependencies and signatures of the given packages.
@@ -432,8 +469,8 @@ def run(
     :param verbose_depcheck:
         Boolean indicating whether to have verbose dependency check output.
 
-    :param dev_signed:
-        Boolean indicating whether the input ISO was dev or rel signed.
+    :param sig_type:
+        What sort of key the packages in the ISO were signed with
 
     """
     errors: List[Union[_VerifyDependenciesError, _VerifySignaturesError]] = []
@@ -451,7 +488,11 @@ def run(
             errors.append(possible_error)
 
     try:
-        _verify_signatures(pkgs.get_all_pkgs(), pkg_to_file, dev_signed)
+        for group in _isoformat.PackageGroup:
+            if group.verify_signatures:
+                _verify_signatures(
+                    pkgs.get_all_pkgs(group), pkg_to_file, sig_type
+                )
     except _VerifySignaturesError as e:
         errors.append(e)
 

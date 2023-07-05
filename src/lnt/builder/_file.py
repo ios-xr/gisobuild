@@ -46,33 +46,9 @@ import tarfile
 
 from typing import Any, Dict, Generator, List, Optional
 
+from utils import gisoutils as ggisoutils
 from .. import gisoutils
-
-
-# ------------------------------------------------------------------------------
-# Path global variables
-
-_GROUPS = "groups"
-_GROUP_PKG_DIR = "groups/group.{}/packages"
-
-_MISC = "misc"
-
-# Path to the optional ztp.ini config file
-_ZTP = "{}/ztp.ini".format(_MISC)
-
-# Path to the initial configuration file
-_INIT_CFG = "{}/config".format(_MISC)
-
-# Path to the label
-_LABEL = "{}/label".format(_MISC)
-
-# Path to mdata.json (including old 7.5.1 location)
-_MDATA_751 = "private/mdata/mdata.json"
-_MDATA = "{}/mdata.json".format(_MISC)
-
-# Names of the groups we expect to add packages to
-_MAIN = "main"
-_KEYS = "keys"
+from . import _isoformat
 
 
 # -------------------------------------------------------------------------
@@ -154,10 +130,9 @@ class UpdateAttributeError(Exception):
 ###############################################################################
 
 
-class FileTypeEnum(enum.Enum):
+class FileType(enum.Enum):
     """
-    Enum for the possible types of individual files that will be added to the
-    GISO
+    The types of individual files that may be added to the GISO
 
     .. attribute:: CONFIG
 
@@ -230,7 +205,7 @@ def _unpack_tgz(tgz_file: str, tmp_dir: str) -> str:
     _log.debug("Unpacking %s into %s", tgz_file, output)
 
     with tarfile.open(tgz_file, "r:gz") as tgz:
-        tgz.extractall(output)
+        ggisoutils.tar_extract_all(tgz, Path(output))
 
     return output
 
@@ -259,7 +234,7 @@ def _unpack_tar(tar_file: str, tmp_dir: str) -> str:
     _log.debug("Unpacking %s into %s", tar_file, output)
 
     with tarfile.open(tar_file, "r") as tar:
-        tar.extractall(output)
+        ggisoutils.tar_extract_all(tar, Path(output))
 
     return output
 
@@ -314,6 +289,34 @@ def get_zipped_and_unzipped_rpms(item: str, tmp_dir: str) -> List[str]:
     return rpms_found
 
 
+def _ensure_group_exists(iso_dir: str, group: _isoformat.PackageGroup) -> None:
+    """
+    Ensure the given group exists within the ISO. If it does not exist, create
+    it; if it does not have group attributes, create those too.
+    """
+    pkg_path = os.path.join(
+        iso_dir, _isoformat.ISO_GROUP_PKG_DIR.format(group.group_name)
+    )
+    os.makedirs(pkg_path, exist_ok=True)
+
+    attr_dir = os.path.join(
+        iso_dir, _isoformat.ISO_GROUP_ATTR_DIR.format(group.group_name)
+    )
+    os.makedirs(attr_dir, exist_ok=True)
+
+    for attr in group.attributes:
+        with open(
+            os.path.join(
+                iso_dir,
+                _isoformat.ISO_GROUP_ATTR_FILE.format(
+                    group.group_name, attr.name
+                ),
+            ),
+            "w",
+        ) as f:
+            f.write(attr.to_json())
+
+
 ###############################################################################
 #                                   APIs                                      #
 ###############################################################################
@@ -358,7 +361,9 @@ def get_group_package_dir(iso_dir: str, group: str) -> str:
     :returns:
         Path to group package directory
     """
-    group_dir = os.path.join(iso_dir, _GROUP_PKG_DIR.format(group))
+    group_dir = os.path.join(
+        iso_dir, _isoformat.ISO_GROUP_PKG_DIR.format(group)
+    )
     return group_dir
 
 
@@ -381,9 +386,9 @@ def get_group_rpms(iso_dir: str, group: str) -> List[str]:
 def add_package(
     iso_dir: str,
     pkg: Optional[str] = None,
-    group: Optional[str] = None,
+    group: Optional[_isoformat.PackageGroup] = None,
     file_to_add: Optional[str] = None,
-    file_type: Optional[FileTypeEnum] = None,
+    file_type: Optional[FileType] = None,
 ) -> None:
     """
     Adds the specified package to the unpacked ISO directory where it will be
@@ -404,7 +409,7 @@ def add_package(
         which file is being added.
 
     :param file_type:
-        Enum of the file being added
+        What sort of file is being added
 
 
     """
@@ -419,23 +424,27 @@ def add_package(
     # file to its place in the top level ISO.
     if group and not file_to_add:
         # Groups are stored in the unpacked iso as group.<name>
-        dest = os.path.join(iso_dir, _GROUP_PKG_DIR.format(group))
+        dest = os.path.join(
+            iso_dir, _isoformat.ISO_GROUP_PKG_DIR.format(group.group_name)
+        )
         # Make the packages directory if it doesn't already exist
-        os.makedirs(dest, exist_ok=True)
+        _ensure_group_exists(iso_dir, group)
         source = pkg
     elif file_to_add and not group:
         # Map the file to the expected location in the ISO
-        if file_type == FileTypeEnum.CONFIG:
-            dest = os.path.join(iso_dir, _INIT_CFG)
-        elif file_type == FileTypeEnum.ZTP:
-            dest = os.path.join(iso_dir, _ZTP)
-        elif file_type == FileTypeEnum.LABEL:
-            dest = os.path.join(iso_dir, _LABEL)
-        elif file_type == FileTypeEnum.MDATA:
-            if os.path.exists(os.path.join(iso_dir, _MDATA_751)):
-                dest = os.path.join(iso_dir, _MDATA_751)
+        if file_type == FileType.CONFIG:
+            dest = os.path.join(iso_dir, _isoformat.ISO_PATH_INIT_CFG)
+        elif file_type == FileType.ZTP:
+            dest = os.path.join(iso_dir, _isoformat.ISO_PATH_ZTP)
+        elif file_type == FileType.LABEL:
+            dest = os.path.join(iso_dir, _isoformat.ISO_PATH_LABEL)
+        elif file_type == FileType.MDATA:
+            if os.path.exists(
+                os.path.join(iso_dir, _isoformat.ISO_PATH_MDATA_751)
+            ):
+                dest = os.path.join(iso_dir, _isoformat.ISO_PATH_MDATA_751)
             else:
-                dest = os.path.join(iso_dir, _MDATA)
+                dest = os.path.join(iso_dir, _isoformat.ISO_PATH_MDATA)
         source = file_to_add
     else:
         raise ItemToAddNotSpecifiedError()
@@ -453,7 +462,7 @@ def add_package(
         raise CopyPkgError(source, dest, str(error)) from error
 
 
-def add_rpm(pkg: str, iso_dir: str) -> None:
+def add_rpm(pkg: str, iso_dir: str, group: _isoformat.PackageGroup) -> None:
     """
     Add a RPM to the unpacked ISO
 
@@ -464,9 +473,12 @@ def add_rpm(pkg: str, iso_dir: str) -> None:
         The directory in which the ISO has been unpacked and to add the package
         to
 
+    :param group:
+        The group to which the package should be added
+
     """
 
-    add_package(iso_dir, pkg=pkg, group=_MAIN)
+    add_package(iso_dir, pkg=pkg, group=group)
 
 
 def add_keys(pkg: str, iso_dir: str) -> None:
@@ -482,7 +494,7 @@ def add_keys(pkg: str, iso_dir: str) -> None:
 
     """
 
-    add_package(iso_dir, pkg=pkg, group=_KEYS)
+    add_package(iso_dir, pkg=pkg, group=_isoformat.PackageGroup.KEY_PKGS)
 
 
 def add_bridging_bugfix(pkg: str, iso_dir: str) -> None:
@@ -497,7 +509,7 @@ def add_bridging_bugfix(pkg: str, iso_dir: str) -> None:
         to.
 
     """
-    add_package(iso_dir, pkg=pkg, group="bridging")
+    add_package(iso_dir, pkg=pkg, group=_isoformat.PackageGroup.BRIDGING_PKGS)
 
 
 def clear_bridging_bugfixes(iso_dir: str, mdata: Dict[str, Any]) -> None:
@@ -515,8 +527,12 @@ def clear_bridging_bugfixes(iso_dir: str, mdata: Dict[str, Any]) -> None:
         mdata["groups"], "bridging"
     )
     for group in bridging_groups:
-        shutil.rmtree(os.path.join(iso_dir, _GROUP_PKG_DIR.format(group)))
-        _log.debug("Removed packages %s", _GROUP_PKG_DIR.format(group))
+        shutil.rmtree(
+            os.path.join(iso_dir, _isoformat.ISO_GROUP_PKG_DIR.format(group))
+        )
+        _log.debug(
+            "Removed packages %s", _isoformat.ISO_GROUP_PKG_DIR.format(group)
+        )
 
 
 def remove_package(pkg: str, iso_dir: str, mdata: Dict[str, Any]) -> None:
@@ -535,14 +551,22 @@ def remove_package(pkg: str, iso_dir: str, mdata: Dict[str, Any]) -> None:
         Iso metadata, as parsed json object returned from query content
 
     """
-    install_groups = gisoutils.get_groups_with_attr(mdata["groups"], "install")
+    installable_group_set = set()
+    for attr in _isoformat.INSTALLABLE_PKG_GROUP_ATTRS:
+        installable_group_set.update(
+            gisoutils.get_groups_with_attr(mdata["groups"], attr)
+        )
+    installable_groups = list(installable_group_set)
+
     # Find all the packages that match the given pattern in the unpacked ISO
     # and remove them
     with change_dir(iso_dir):
         # Search under groups/*/packages so we don't end up accidentally
         # removing top level files
-        for group in install_groups:
-            search_pattern = _GROUP_PKG_DIR.format(group) + "/" + pkg
+        for group in installable_groups:
+            search_pattern = (
+                _isoformat.ISO_GROUP_PKG_DIR.format(group) + "/" + pkg
+            )
             for item in glob.iglob(search_pattern):
                 try:
                     os.remove(item)

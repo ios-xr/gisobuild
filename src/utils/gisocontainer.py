@@ -2,7 +2,7 @@
 
 """ Launch a GISO build in a container.
 
-Copyright (c) 2022 Cisco and/or its affiliates.
+Copyright (c) 2022-2023 Cisco and/or its affiliates.
 This software is licensed to you under the terms of the Cisco Sample
 Code License, Version 1.1 (the "License"). You may obtain a copy of the
 License at
@@ -29,12 +29,15 @@ import argparse
 import datetime
 import itertools
 import os
+import glob
+import typing
 import logging
 import pathlib
 import secrets
 import shutil
 import sys
 import tempfile
+import types
 
 from typing import (
     Iterator,
@@ -64,6 +67,28 @@ _containertool = "docker"
 #   output dir
 _CTR_OUT_DIR = gglobals.CTR_OUT_DIR
 _CTR_LOG_DIR = gglobals.CTR_LOG_DIR
+
+# incase of eXR gisobuild staging location inside /tmp is failing due to error:
+#   "no space left on device"
+# so instead of using /tmp we are using the user provided staing location.
+
+
+def eXR_fix_staging_location(
+    cli_args: argparse.Namespace, container: types.ModuleType
+) -> None:
+    """
+    Changes the temporary staging location to a temporary directory
+    inside "out_directory" incase of eXR.
+    :param cli:
+        commandline arguments.
+    :param container:
+        imported module: gisobuild_docker_exr
+    """
+    if cli_args.exriso:
+        gglobals.CTR_OUT_DIR = tempfile.mkdtemp(dir=cli_args.out_directory)
+        global _CTR_OUT_DIR
+        _CTR_OUT_DIR = gglobals.CTR_OUT_DIR
+        setattr(container, "_CTR_OUT_DIR", gglobals.CTR_OUT_DIR)
 
 
 def _print_error(line: str) -> None:
@@ -107,17 +132,60 @@ def _system_resource_check() -> None:
 
     try:
         _subprocs.execute([_containertool, "info"], verbose_logging=False)
-    except _subprocs.CalledProcessError:
+    except (_subprocs.CalledProcessError, FileNotFoundError):
         try:
             # If docker isn't available, try podman
             _containertool = "podman"
             _subprocs.execute([_containertool, "info"], verbose_logging=False)
-        except _subprocs.CalledProcessError:
+        except (_subprocs.CalledProcessError, FileNotFoundError):
             _fatal_error(
                 "Enable docker or podman service to allow container pull and run."
             )
 
     logger.debug("Found working container tool: %s", _containertool)
+
+
+def unify_staging(
+    cli_args: argparse.Namespace,
+) -> typing.Optional[tempfile.TemporaryDirectory]:  # type: ignore
+    """
+    Aggregates package files from multiple repo(s) into one location and sets
+    correct access rights inorder to make it accessible inside docker container.
+    """
+    unified_staging = None
+    # {pkgname: pkg_filepath}
+    unified_pkgs = {}
+    for repo in cli_args.repo:
+        repo = os.path.normpath(repo)
+        logger.info("Scanning: %s", repo)
+        acceptable_file_extentions = ["rpm", "tar", "tgz"]
+        for ext in acceptable_file_extentions:
+            for r_file in glob.glob(os.path.join(repo, f"*.{ext}")):
+                unified_pkgs.update({os.path.basename(r_file): r_file})
+
+    if len(unified_pkgs):
+        unified_staging = tempfile.TemporaryDirectory(
+            prefix="UNIFIED_REPO-", dir=cli_args.out_directory
+        )
+        for file_path in unified_pkgs.values():
+            if os.access(file_path, os.R_OK):
+                logger.debug("READ ACCESS: %s [OK]", file_path)
+                logger.debug(
+                    "Copying: %s to %s", file_path, unified_staging.name
+                )
+                shutil.copy(file_path, unified_staging.name)
+                os.chmod(
+                    os.path.join(
+                        unified_staging.name, os.path.basename(file_path)
+                    ),
+                    0o777,
+                )
+            else:
+                logger.warning("READ ACCESS: %s [FAILED]", file_path)
+    if unified_staging:
+        cli_args.repo.clear()
+        cli_args.repo.append(unified_staging.name)
+    return unified_staging
 
 
 def _get_volumes_to_mount(args: argparse.Namespace, infile: str) -> List[str]:
@@ -256,7 +324,7 @@ def _build_image(name: str, tag: str, context_dir: str) -> None:
 
 def _find_dockerfile() -> pathlib.Path:
     """Return the path to our Dockerfile."""
-    path = pathlib.Path(__file__).parents[2] / "Dockerfile"
+    path = pathlib.Path(os.path.abspath(__file__)).parents[2] / "Dockerfile"
     if not path.exists():
         raise RuntimeError(
             "Can't find Dockerfile to build a container image, "
@@ -434,6 +502,8 @@ def _execute_build(cli_args: argparse.Namespace) -> None:
     else:
         from lnt.launcher import _container as container  # type: ignore
 
+    eXR_fix_staging_location(cli_args, container)
+
     logger.debug("Running with: %s", cli_args)
 
     system_resource_check = _system_resource_check
@@ -446,6 +516,7 @@ def _execute_build(cli_args: argparse.Namespace) -> None:
     log_dir = out_dir / _CTR_LOG_DIR / _get_current_datetime_as_str()
     copy_dir = _canonical_path(cli_args.copy_directory)
     system_resource_check()
+    unified_repo = unify_staging(cli_args)
     infile = system_build_prep_env(cli_args)
     logger.info("Setting up container environment...")
     image = _ensure_image()
@@ -458,6 +529,8 @@ def _execute_build(cli_args: argparse.Namespace) -> None:
         logger.exception("\nGiso Build failed. Stage error logs if available.")
     finally:
         gisoutils.stop_progress()
+        if unified_repo:
+            unified_repo.cleanup()
         try:
             img_dir = _stage_artefacts(out_dir, container_name)
             _subprocs.execute(

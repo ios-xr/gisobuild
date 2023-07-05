@@ -37,6 +37,7 @@ import stat
 import pprint
 from utils import gisoutils
 import pathlib
+from typing import List
 
 __version__ = '0.37'
 GISO_PKG_FMT_VER = 1.0
@@ -1284,6 +1285,172 @@ class Rpmdb:
         list(map(lambda rpm_inst: logger.debug("\t\t%s" % rpm_inst.file_name), 
             self.tp_rpm_list))
 
+    def filter_tp_rpms_by_supported_arch(self, iso_mount_path: pathlib.Path, iso_version: str):
+        """
+            filter tp_rpms list as follows:
+                1. Raise error when SMU is present but base rpm is missing.
+                2. SMU version doesn't match iso_version
+                3. remove TP SMUs that are of unsupported architectures.
+        """
+        class TP_SMU_Rpm:
+            def __init__(self, rpm: Rpm) -> None:
+                self.rpm = rpm
+                #Ex: vim-vimrc-8.2.p1-r0.1.r79126I.CSCaa11111.admin.corei7_64.rpm
+                self.rpm_name = rpm.file_name
+                self.name = None     #name of the package: vim-vimrc
+                
+                self.ver = None      #SMU version: 8.2.p1
+                self.base_ver = None #Expected version of the base package: 8.2
+                
+                self.release = None      #SMU corresponding to a perticular CISCO release: r79126I
+                self.base_release = None #release version of the base pkg: r0.1
+                
+                self.ddts_id = None      #CSCaa11111
+                self.vm = None           #xr/admin/host
+                self.arch = None         #architecture
+                self.base_rpm = None     #{name}-{base_ver}-{base_release}.{self.vm}.{self.arch}.rpm 
+                                         #         --Expected name of the base rpm corresponding to this SMU
+                self._populate_mdata()
+
+            def _populate_mdata(self):
+                #name: vim-vimrc-8.2.p1-r0.1.r79126I.CSCaa11111.admin.corei7_64.rpm
+                #vim-vimrc-8.2-r0.1.admin.corei7_64.rpm
+                self.name, version, more = self.rpm_name.strip().rsplit("-", 2)
+                #vim-vimrc		8.2.p1		r0.1.r79126I.CSCaa11111.admin.corei7_64.rpm
+                self.ver = version
+                self.base_ver = version.rsplit('.', 1)[0]
+                try:
+                    more = more.replace(".rpm", "")
+                    #more: r0.1.r79126I.CSCaa11111.admin.corei7_64
+                    more, self.vm, self.arch = more.rsplit('.', 2)
+                    #more: r0.1.r79126I.CSCaa11111
+                    self.base_release, self.release, self.ddts_id = more.rsplit('.', 2)
+                    self.base_rpm = f"{self.name}-{self.base_ver}-{self.base_release}.{self.vm}.{self.arch}.rpm"
+                except AttributeError:
+                    print("Error parsing: ", self.name)
+            
+            # following functions return a tuple containing:
+            #   1. the SMU required for a perticular vm
+            #       {name}-{ver}-{base_release}.{release}.{ddts_id}.{vm}.{arch}.rpm
+            #   2. the base rpm that go with it
+            #       {name}-{base_ver}-{base_release}.{vm}.{arch}.rpm
+            def get_req_for(self, vm: str):
+                """
+                    When a SMU is present we expect the following to be also present:
+                    1. SMU for all vms
+                    2. base package for each SMU found in step one.
+                    This function returns a tuple of SMU + Base corresponding to a perticular VM. 
+                """
+                smu = f"{self.name}-{self.ver}-{self.base_release}.{self.release}.{self.ddts_id}.{vm}.{self.arch}.rpm"
+                base = f"{self.name}-{self.base_ver}-{self.base_release}.{vm}.{self.arch}.rpm"
+                return smu, base
+            def get_req_all(self, arch_type):
+                vm_list = ["xr", "admin", "host"]
+                if arch_type == 'arm':
+                    vm_list = ["admin", "host"]
+                reqs = []
+                for vm in vm_list:
+                    reqs.extend(self.get_req_for(vm))
+                return reqs
+            def is_for_release(self, release: str):
+                release = release.replace(".", "")
+                assert self.release is not None
+                if release in self.release:
+                    return True
+                return False
+
+        class Supported_Arch:
+            def __init__(self, arm, x86_64) -> None:
+                # Variants of arm that are supported in the platform of the iso
+                self.arm = arm
+                # Variants of x86_64 that are supported in the variants of the iso
+                self.x86_64 = x86_64
+                
+            def check_supported(self, rpm: TP_SMU_Rpm):
+                if rpm.arch in self.arm or rpm.arch in self.x86_64:
+                    return True
+                return False
+            def get_arch_type(self, rpm: TP_SMU_Rpm):
+                if rpm.arch in self.arm:
+                    return "arm"
+                if rpm.arch in self.x86_64:
+                    return "x86_64"
+                return None
+
+        def get_supported_arch():
+            img_mdata = iso_mount_path / "iosxr_image_mdata.yml"
+            assert img_mdata.exists()
+            with img_mdata.open('r') as f_mdata:
+                try:
+                    mdata = yaml.safe_load(f_mdata)
+                    return Supported_Arch(
+                        arm=mdata["arm supported arch list"].split(' '),
+                        x86_64=mdata["x86_64 supported arch list"].split(' ')
+                    )
+                except yaml.YAMLError as ye:
+                    logger.error("Bad yaml in iso: {}".format(img_mdata))
+                    raise ye
+                except KeyError as ke:
+                    logger.error("{} missing in {}".format(ke.args, img_mdata))
+                    raise ke
+        
+        supported_arches: Supported_Arch = get_supported_arch()
+        
+        validated_tp_rpms = set()               # set(Rpm)
+        skipped_release_mismatch_rpms = set()   # set(TP_SMU_Rpm)
+        skipped_unsupp_arch_rpms = set()        # set(TP_SMU_Rpm)
+        skipped_base_vm_missing_rpms = {} # {TP_SMU_Rpm: [missing]}
+        
+        TP_SMUs = [TP_SMU_Rpm(rpm) for rpm in self.tp_rpm_list if "CSC" in rpm.file_name]
+        for TP_SMU in TP_SMUs:
+            """
+                Check the following:
+                    1. if the architecture is supported.
+                    2. if the SMU release matches the iso release
+                    3. all the Other VM conterparts including their corresponding
+                       base pkgs are present
+            """
+            if TP_SMU.rpm in validated_tp_rpms:
+                continue
+            if not supported_arches.check_supported(TP_SMU):
+                skipped_unsupp_arch_rpms.add(TP_SMU)
+                continue
+            if not TP_SMU.is_for_release(iso_version):
+                skipped_release_mismatch_rpms.add(TP_SMU)
+                continue
+            arch_type = supported_arches.get_arch_type(TP_SMU)
+            required_rpms = TP_SMU.get_req_all(arch_type)
+            skipped = []
+            for rpm in required_rpms:
+                tp_rpm_files = {tp_rpm.file_name : tp_rpm for tp_rpm in self.tp_rpm_list}
+                if rpm not in tp_rpm_files:
+                    skipped.append(rpm)
+                    continue
+                tp_rpm_files[rpm].arch = arch_type
+                validated_tp_rpms.add(tp_rpm_files[rpm])
+            if len(skipped) > 0:
+                skipped_base_vm_missing_rpms[TP_SMU] = skipped
+            else:
+                TP_SMU.rpm.arch = arch_type
+                validated_tp_rpms.add(TP_SMU.rpm)
+
+        self.tp_rpm_list = [tp_rpm for tp_rpm in validated_tp_rpms]
+        self.tp_rpm_count = len(validated_tp_rpms) # TODO: make tp_rpm_count a property
+        logger.info(f"{self.tp_rpm_count} valid TP Rpms:")
+        list(map(lambda rpm: logger.info(f"\t\t{rpm.file_name}"), validated_tp_rpms))
+        
+        if len(skipped_unsupp_arch_rpms) > 0:
+            logger.info("Skipping the following TP rpms as the architecture is not supported:")
+            list(map(lambda rpm: logger.info(f"\t\t{rpm.rpm_name}"), skipped_unsupp_arch_rpms))
+        
+        if len(skipped_release_mismatch_rpms) > 0:
+            logger.info("Skipping the following TP rpms as the release doesn't match with the iso:")
+            list(map(lambda rpm: logger.info(f"\t\t{rpm.rpm_name}"), skipped_release_mismatch_rpms))
+        if len(skipped_base_vm_missing_rpms.keys()) > 0:
+            logger.info("Skipping the following beacuse of unmet dependencies:")
+            for skipped_rpm, deps in skipped_base_vm_missing_rpms.items():
+                logger.info(f"\t{skipped_rpm.rpm_name}:")
+                list(map(lambda rpm: logger.info(f"\t\t{rpm}"), deps))
     # Remove superseded tp smu present in the list
     @staticmethod
     def find_superseded_tp_smu(rpm_set):
@@ -1572,7 +1739,7 @@ class Rpmdb:
     # get_missing_arch_rpm() will return list of rpms 
     # missing for each architecture
     #
-    def get_missing_arch_rpm(self, vm_type, supp_arch):
+    def get_missing_arch_rpm(self, vm_type, supp_arch, multi_arch_supported=False):
         missing_cisco_rpm_list = {}
         missing_tp_rpm_list = {}
         temp_missing_tp_rpm_list = {} 
@@ -1593,51 +1760,55 @@ class Rpmdb:
             missing_cisco_rpm_list[arch] = list(set(all_rpms) - 
                                           set(arch_rpm_name_version[arch]))
 
-        all_rpms = []
-        arch_rpm_name_version = {}
-        for arch in supp_arch:
-            arch_rpm_name_version[arch] = []
-            for rpm2 in self.get_tp_rpms_by_vm_arch(vm_type, arch):
-                arch_rpm_name_version[arch].append("%s-%s-%s"
-                                                   % (rpm2.name, rpm2.version, 
-                                                      rpm2.release))
-            all_rpms.extend(arch_rpm_name_version[arch])
-        all_rpms = list(set(all_rpms))
-        for arch in supp_arch:
-            missing_tp_rpm_list[arch] = list(set(all_rpms) - 
-                                          set(arch_rpm_name_version[arch]))
-            temp_missing_tp_rpm_list[arch] = missing_tp_rpm_list[arch][:]  
+        if not multi_arch_supported:
+            all_rpms = []
+            arch_rpm_name_version = {}
+            for arch in supp_arch:
+                arch_rpm_name_version[arch] = []
+                for rpm2 in self.get_tp_rpms_by_vm_arch(vm_type, arch):
+                    arch_rpm_name_version[arch].append("%s-%s-%s"
+                                                    % (rpm2.name, rpm2.version, 
+                                                        rpm2.release))
+                all_rpms.extend(arch_rpm_name_version[arch])
+            all_rpms = list(set(all_rpms))
+            for arch in supp_arch:
+                missing_tp_rpm_list[arch] = list(set(all_rpms) - 
+                                            set(arch_rpm_name_version[arch]))
+                temp_missing_tp_rpm_list[arch] = missing_tp_rpm_list[arch][:]  
 
-        # tp rpms may be released for only one arch card. so need to validate
-        # from sdk metadata whether its a real missing or virtual mising
-        for arch in supp_arch:
-            for rpm_nvr in temp_missing_tp_rpm_list[arch]:
-                mre = re.search(r'(.*)-(.*)-(.*)', rpm_nvr)
-                rpm_name = "%s.%s.%s" % (rpm_nvr, arch, "rpm")
-                if mre:
-                    tp_rpm_name = mre.groups()[0]
-                    tp_rpm_ver = mre.groups()[1]
-                    tp_rpm_rel = mre.groups()[2]
-                    tp_rpm_arch = arch 
-                    if tp_rpm_rel.upper().endswith(ADMIN_SUBSTRING):
-                        base_rpm = self.get_tp_base_rpm(platform_key, 
-                                                        ADMIN_SUBSTRING,
-                                                        rpm_name)
-                        if base_rpm is None:
-                            logger.debug("Admin tp rpm %s is invalid\n" % rpm_name) 
-                            missing_tp_rpm_list[arch].remove(rpm_nvr)
+            # tp rpms may be released for only one arch card. so need to validate
+            # from sdk metadata whether its a real missing or virtual mising
+            for arch in supp_arch:
+                for rpm_nvr in temp_missing_tp_rpm_list[arch]:
+                    mre = re.search(r'(.*)-(.*)-(.*)', rpm_nvr)
+                    rpm_name = "%s.%s.%s" % (rpm_nvr, arch, "rpm")
+                    if mre:
+                        tp_rpm_name = mre.groups()[0]
+                        tp_rpm_ver = mre.groups()[1]
+                        tp_rpm_rel = mre.groups()[2]
+                        tp_rpm_arch = arch 
+                        if tp_rpm_rel.upper().endswith(ADMIN_SUBSTRING):
+                            base_rpm = self.get_tp_base_rpm(platform_key, 
+                                                            ADMIN_SUBSTRING,
+                                                            rpm_name)
+                            if base_rpm is None:
+                                logger.debug("Admin tp rpm %s is invalid\n" % rpm_name) 
+                                missing_tp_rpm_list[arch].remove(rpm_nvr)
 
-                    if tp_rpm_rel.upper().endswith(HOST_SUBSTRING):
-                        base_rpm = self.get_tp_base_rpm(platform_key, 
-                                                        HOST_SUBSTRING,
-                                                        rpm_name)
-                        if base_rpm is None:
-                            logger.debug("Host tp rpm %s is invalid\n" % rpm_name) 
-                            missing_tp_rpm_list[arch].remove(rpm_nvr)
+                        if tp_rpm_rel.upper().endswith(HOST_SUBSTRING):
+                            base_rpm = self.get_tp_base_rpm(platform_key, 
+                                                            HOST_SUBSTRING,
+                                                            rpm_name)
+                            if base_rpm is None:
+                                logger.debug("Host tp rpm %s is invalid\n" % rpm_name) 
+                                missing_tp_rpm_list[arch].remove(rpm_nvr)
       
         for arch in supp_arch:
-            missing_rpm_list[arch] = list(set(missing_cisco_rpm_list[arch]) | 
+            if not multi_arch_supported:
+                missing_rpm_list[arch] = list(set(missing_cisco_rpm_list[arch]) | 
                                           set(missing_tp_rpm_list[arch]))
+            else:
+                missing_rpm_list[arch] = list(set(missing_cisco_rpm_list[arch]))
         return missing_rpm_list
 
     def get_sp_info(self):
@@ -1691,7 +1862,7 @@ class Iso(object):
     ISO_INFO_FILE = "iso_info.txt"
     ISO_INITRD_RPATH = "/boot/initrd.img"
     RPM_TEST_LOG = "/tmp/rpmtest.log"
-    RPM_OPTIONS = " rpm -i --test --noscripts "
+    RPM_OPTIONS = " rpm -i --test --noscripts --force "
     GRUB_FILES = ["boot/grub2/grub-usb.cfg", "boot/grub2/grub.cfg"]
     INSTALL_PKG_PLATFORMS = ["ncs5500", "asr9k-x64", "ncs1k", "ncs1001", "ncs1004", "ncs5k"]
 
@@ -1931,8 +2102,10 @@ class Iso(object):
 
         # run compatibility check
         try:
-            run_cmd("chroot %s %s %s" % (self.iso_extract_path, Iso.RPM_OPTIONS,
-                    rpm_file_list))
+            compat_cmd = "chroot %s %s %s" % (
+                self.iso_extract_path, Iso.RPM_OPTIONS, rpm_file_list
+            )
+            run_cmd(compat_cmd)
         except Exception as e:
             errstr = str(e).split("--->")
             logger.debug(errstr[0])
@@ -1947,7 +2120,9 @@ class Iso(object):
                     logger.debug("Ignoring false dependancy")
                     continue
                 # Fretta hack for netbase false dependeancy
-                elif 'netbase' or 'rpm' or 'udev' in line:
+                elif ('netbase' in line
+                      or 'rpm' in line
+                      or 'udev' in line):
                     logger.debug("Ignoring false dependancy")
                     continue
                 elif 'signature: NOKEY' in line :
@@ -2972,7 +3147,7 @@ class Giso:
                     logger.info ("\nPackaging bridge SMUs with input:\n\t {}".format (
                                   '\n\t '.join(args.bridge_fixes)))
                     try:
-                        gisoutils.execute (cmd)
+                        run_cmd(cmd)
                     except:
                         logger.info ("Warning! Unable to package bridge SMUs. "
                                         "Continuing build...")

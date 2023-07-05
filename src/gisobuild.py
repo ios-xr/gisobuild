@@ -3,7 +3,7 @@
 
 """ Utility to build golden iso.
 
-Copyright (c) 2022 Cisco and/or its affiliates.
+Copyright (c) 2022-2023 Cisco and/or its affiliates.
 This software is licensed to you under the terms of the Cisco Sample
 Code License, Version 1.1 (the "License"). You may obtain a copy of the
 License at
@@ -49,7 +49,7 @@ DFLT_OUTPUT_DIR = os.path.join(cwd, "output_{}".format(MODULE_NAME))
 logger = logging.getLogger(MODULE_NAME)
 
 
-def parsecli() -> argparse.Namespace:
+def parsecli() -> Tuple[argparse.Namespace, argparse.ArgumentParser]:
     parser = argparse.ArgumentParser(
         description="Utility to build Golden ISO for IOS-XR.",
     )
@@ -231,7 +231,7 @@ def parsecli() -> argparse.Namespace:
         nargs="+",
         default=[],
         help=(
-            "Remove RPMs, specified in a comma separated list. These are "
+            "Remove RPMs, specified in a space separated list. These are "
             "matched against user installable package names, and must be "
             "the whole package name, e.g: xr-bgp"
         ),
@@ -298,7 +298,7 @@ def parsecli() -> argparse.Namespace:
 
     pargs = parser.parse_args()
 
-    return pargs
+    return pargs, parser
 
 
 """ Validate input arguments. Also return if exr or lnt iso is provided. """
@@ -427,7 +427,7 @@ def validate_and_setup_args(args: argparse.Namespace) -> argparse.Namespace:
 
 def main() -> None:
     """ Parse CLI options """
-    cli_args = parsecli()
+    cli_args, parser = parsecli()
     transform_dict: Dict[str, Any] = {}
 
     """ If yaml file is provided at input, validate and populate cli_args """
@@ -437,11 +437,10 @@ def main() -> None:
             {
                 x: y
                 for x, y in cli_args.__dict__.items()
-                if cli_args.__dict__[x] and x not in yaml_args.keys()
+                if cli_args.__dict__[x] != parser.get_default(x)
             }
         )
         cli_args.__dict__.update(yaml_args)
-
     if not cli_args.out_directory:
         cli_args.out_directory = DFLT_OUTPUT_DIR
 
@@ -506,7 +505,7 @@ def main() -> None:
         from utils.gisocontainer import execute_build
 
     elif cli_args.exriso:
-        from exrmod.isotools_exr import execute_build # type: ignore
+        from exrmod.isotools_exr import execute_build
 
         transform_dict = EXR_CLI_DICT_MAP
     else:

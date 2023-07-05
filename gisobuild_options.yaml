@@ -7,7 +7,7 @@
 # --pkglist PKGLIST [PKGLIST ...]
 #                       Optional list of rpm or smu to add to the ISO.
 # --remove-packages REMOVE_PACKAGES [REMOVE_PACKAGES ...]
-#                       Remove named RPMs, specified in a comma separated list. Valid build
+#                       Remove named RPMs, specified in a space separated list. Valid build
 #                       option for LNT only. eXR builds simply ignores this option.
 # --bridging-fixes BRIDGE_FIXES [BRIDGE_FIXES ...]
 #                       Bridging rpms to package. Takes from-release (supported for eXR)

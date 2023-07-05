@@ -69,7 +69,7 @@ EXR only build options:
 
 LNT only build options:
   --remove-packages REMOVE_PACKAGES [REMOVE_PACKAGES ...]
-                        Remove RPMs, specified in a comma separated list.
+                        Remove RPMs, specified in a space separated list.
                         These are matched against user installable package
                         names, and must be the whole package name, e.g: xr-bgp
   --skip-usb-image      Do not build the USB image

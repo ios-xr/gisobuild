@@ -47,13 +47,10 @@ from typing import (
     Union,
 )
 
+from . import _isoformat
 from . import _packages
 
 _log = logging.getLogger(__name__)
-
-
-_CISCO_PID_PREFIX = "cisco-pid-"
-_XR_FOUNDATION = "xr-foundation"
 
 
 class CantGroupPkgsByPidError(Exception):
@@ -162,7 +159,9 @@ class Block:
         # indicate it belongs on <pid-name>
         for pkg in self.instance_pkgs:
             if (
-                _get_requires_by_name(pkg, f"{_CISCO_PID_PREFIX}{pid}")
+                _get_requires_by_name(
+                    pkg, f"{_isoformat.CISCO_PID_PREFIX}{pid}"
+                )
                 is not None
             ):
                 return pkg
@@ -305,12 +304,26 @@ class GroupedPackages:
         The third-party tie blocks in this set of packages including the tied
         OS RPMs.
 
+    .. attribute: owner_pkgs
+
+        Owner packages
+
+    .. attribute: partner_pkgs
+
+        Partner packages
+
     """
 
     blocks: Dict[str, Dict[_packages.EVRA, Block]] = dataclasses.field(
         default_factory=lambda: collections.defaultdict(dict)
     )
     tie_blocks: Dict[str, Dict[_packages.EVRA, TieBlock]] = dataclasses.field(
+        default_factory=lambda: collections.defaultdict(dict)
+    )
+    owner_pkgs: Dict[str, Dict[_packages.EVRA, Block]] = dataclasses.field(
+        default_factory=lambda: collections.defaultdict(dict)
+    )
+    partner_pkgs: Dict[str, Dict[_packages.EVRA, Block]] = dataclasses.field(
         default_factory=lambda: collections.defaultdict(dict)
     )
 
@@ -339,21 +352,75 @@ class GroupedPackages:
             for tie_block in block_versions.values()
         ]
 
-    def get_all_pkgs(self) -> Set[_packages.Package]:
+    @property
+    def all_owner_pkgs(self) -> Iterator[_packages.Package]:
+        """Iterate over all owner packages"""
+        yield from [
+            pkg
+            for block_versions in self.owner_pkgs.values()
+            for block in block_versions.values()
+            for pkg in block.all_pkgs
+        ]
+
+    @property
+    def all_partner_pkgs(self) -> Iterator[_packages.Package]:
+        """Iterate over all partner packages"""
+        yield from [
+            pkg
+            for block_versions in self.partner_pkgs.values()
+            for block in block_versions.values()
+            for pkg in block.all_pkgs
+        ]
+
+    def get_all_pkgs(
+        self, group: _isoformat.PackageGroup
+    ) -> Set[_packages.Package]:
         """Get the set of all packages in this group."""
         all_pkgs: Set[_packages.Package] = set()
-        for block in self.all_blocks:
-            all_pkgs |= set(block.all_pkgs)
+        if group == _isoformat.PackageGroup.INSTALLABLE_XR_PKGS:
+            for block in self.all_blocks:
+                all_pkgs |= set(block.all_pkgs)
+        elif group == _isoformat.PackageGroup.INSTALLABLE_OWNER_PKGS:
+            all_pkgs = set(self.all_owner_pkgs)
+        elif group == _isoformat.PackageGroup.INSTALLABLE_PARTNER_PKGS:
+            all_pkgs = set(self.all_partner_pkgs)
         return all_pkgs
+
+    def get_all_pkgs_all_groups(self) -> Set[_packages.Package]:
+        """Get the set of all packages in all groups."""
+        return {
+            pkg
+            for group in _isoformat.PackageGroup
+            for pkg in self.get_all_pkgs(group)
+        }
 
     def get_pkgs_per_pid(self) -> Dict[str, Set[_packages.Package]]:
         """Get a mapping of PID to the packages on that PID."""
         pid_to_pkgs = dict()
-        for pid, pkg in _get_pid_identifier_packages(self.get_all_pkgs()):
+        chosen_rp = None
+        for pid, pkg, card_type in _get_pid_identifier_packages(
+            self.get_all_pkgs(_isoformat.PackageGroup.INSTALLABLE_XR_PKGS)
+        ):
             pid_to_pkgs[pid] = set([pkg])
 
             for block in self.all_blocks:
                 pid_to_pkgs[pid] |= block.get_pkgs_on_pid(pid)
+
+            if card_type in _isoformat.RP_CARD_TYPES:
+                if chosen_rp is None or pid < chosen_rp:
+                    chosen_rp = pid
+
+        # Add a pseudo-PID for checking owner + partner packages, if needed
+        owner_pkgs = set(self.all_owner_pkgs)
+        partner_pkgs = set(self.all_partner_pkgs)
+        if owner_pkgs or partner_pkgs:
+            if chosen_rp is None:
+                raise CantGroupPkgsByPidError(
+                    "Unable to group the packages by PID, no RP card type was found"
+                )
+            pid_to_pkgs["OwnerAndPartnerPackages"] = (
+                pid_to_pkgs[chosen_rp] | owner_pkgs | partner_pkgs
+            )
 
         if not pid_to_pkgs:
             raise CantGroupPkgsByPidError(
@@ -366,7 +433,11 @@ class GroupedPackages:
         all_grouped_pkgs = set()
         for pkgs in pid_to_pkgs.values():
             all_grouped_pkgs |= pkgs
-        all_pkgs = self.get_all_pkgs()
+        all_pkgs = (
+            self.get_all_pkgs(_isoformat.PackageGroup.INSTALLABLE_XR_PKGS)
+            | set(self.all_owner_pkgs)
+            | set(self.all_partner_pkgs)
+        )
         ungrouped_pkgs = all_pkgs - all_grouped_pkgs
         if ungrouped_pkgs:
             raise NotImplementedError(
@@ -383,9 +454,23 @@ class GroupedPackages:
         # Repeat ourselves to placate the type checker.
         evra = block.evra
         if isinstance(block, Block):
-            _log.debug("Adding block of top package %s", str(block.top_pkg))
-            blocks = self.blocks[block.name]
-            assert isinstance(block, Block)
+            if block.top_pkg.is_owner_package:
+                _log.debug(
+                    "Adding block of owner package %s", str(block.top_pkg)
+                )
+                blocks = self.owner_pkgs[block.name]
+
+            elif block.top_pkg.is_partner_package:
+                _log.debug(
+                    "Adding block of partner package %s", str(block.top_pkg)
+                )
+                blocks = self.partner_pkgs[block.name]
+
+            else:
+                _log.debug(
+                    "Adding block of top package %s", str(block.top_pkg)
+                )
+                blocks = self.blocks[block.name]
             if evra in blocks:
                 raise DuplicateEvraError(
                     evra, block.top_pkg, blocks[evra].top_pkg
@@ -418,6 +503,18 @@ class GroupedPackages:
                 del self.tie_blocks[block.name]
         else:
             raise NotImplementedError
+
+    def remove_owner_pkg(self, pkg: _packages.Package) -> None:
+        """Remove the given owner package"""
+        del self.owner_pkgs[pkg.name][pkg.evra]
+        if not self.owner_pkgs[pkg.name]:
+            del self.owner_pkgs[pkg.name]
+
+    def remove_partner_pkg(self, pkg: _packages.Package) -> None:
+        """Remove the given partner package"""
+        del self.partner_pkgs[pkg.name][pkg.evra]
+        if not self.partner_pkgs[pkg.name]:
+            del self.partner_pkgs[pkg.name]
 
     def _check_pkg_can_be_added(
         self,
@@ -465,12 +562,26 @@ class GroupedPackages:
         tie_pkg: _packages.Package,
         tied_pkg: _packages.Package,
     ) -> None:
-        """Add an tied package to the given block."""
+        """Add a tied package to the given block."""
         _log.debug(
             "Adding tied package %s to tie block %s", str(tied_pkg), block_name
         )
         self._check_pkg_can_be_added(self.tie_blocks, block_name, tie_pkg)
         self.tie_blocks[block_name][tie_pkg.evra].tied_pkgs.add(tied_pkg)
+
+    def add_owner_pkg(self, pkg: _packages.Package) -> None:
+        """Add owner package"""
+        _log.debug("Adding owner package %s", str(pkg))
+        self.owner_pkgs[pkg.name][pkg.evra] = Block(
+            pkg.name, pkg.evra, pkg, set(), set()
+        )
+
+    def add_partner_pkg(self, pkg: _packages.Package) -> None:
+        """Add partner package"""
+        _log.debug("Adding partner package %s", str(pkg))
+        self.partner_pkgs[pkg.name][pkg.evra] = Block(
+            pkg.name, pkg.evra, pkg, set(), set()
+        )
 
 
 def _get_dep_by_name(
@@ -560,16 +671,16 @@ def _get_provides_by_prefix(
 
 def _get_pid_identifier_packages(
     pkgs: Iterable[_packages.Package],
-) -> Iterator[Tuple[str, _packages.Package]]:
+) -> Iterator[Tuple[str, _packages.Package, str]]:
     """
     Yield the subset of packages that are PID identifiers.
 
-    Yields `(pid name, package)` pairs.
+    Yields `(pid name, package, pid type)` tuples
 
     """
     for pkg in pkgs:
         pid_deps = set()
-        for dep in _get_provides_by_prefix(pkg, _CISCO_PID_PREFIX):
+        for dep in _get_provides_by_prefix(pkg, _isoformat.CISCO_PID_PREFIX):
             pid_deps.add(dep)
 
         if not pid_deps:
@@ -578,7 +689,27 @@ def _get_pid_identifier_packages(
 
         if len(pid_deps) == 1:
             provider = pid_deps.pop()
-            yield provider.name[len(_CISCO_PID_PREFIX) :], pkg
+            card_types = {
+                provides.name[len(_isoformat.CISCO_CARD_TYPE_PREFIX) :]
+                for provides in _get_provides_by_prefix(
+                    pkg, _isoformat.CISCO_CARD_TYPE_PREFIX
+                )
+            }
+            if len(card_types) != 1:
+                raise NotImplementedError(
+                    f"Package {pkg} appears to have multiple card types: {card_types}"
+                )
+
+            # Get the package's card type from the set.
+            #
+            # Pylint worries that this might raise StopIteration, but that
+            # can't happen because we've already checked the set has size 1.
+            card_type = next(  # pylint: disable=stop-iteration-return
+                iter(card_types)
+            )
+            yield provider.name[
+                len(_isoformat.CISCO_PID_PREFIX) :
+            ], pkg, card_type
         else:
             raise NotImplementedError(
                 f"Package {pkg} appears to be a PID identifier package "
@@ -594,6 +725,28 @@ def _get_ui_packages(
     """
     for pkg in pkgs:
         if _get_provides_by_name(pkg, "cisco-iosxr-user-installable"):
+            yield pkg
+
+
+def _get_owner_packages(
+    pkgs: Iterable[_packages.Package],
+) -> Iterator[_packages.Package]:
+    """
+    Yield the subset of the given packages that are owner packages
+    """
+    for pkg in pkgs:
+        if pkg.is_owner_package:
+            yield pkg
+
+
+def _get_partner_packages(
+    pkgs: Iterable[_packages.Package],
+) -> Iterator[_packages.Package]:
+    """
+    Yield the subset of the given packages that are partner packages
+    """
+    for pkg in pkgs:
+        if pkg.is_partner_package:
             yield pkg
 
 
@@ -722,7 +875,7 @@ def _get_block_from_ui_pkg(pkg: _packages.Package) -> AnyBlock:
 
     elif (
         pkg.name == "xr-mandatory"
-        or _get_provides_by_name(pkg, _XR_FOUNDATION) is not None
+        or _get_provides_by_name(pkg, _isoformat.XR_FOUNDATION) is not None
     ):
         # Treat mandatory and foundation as regular blocks.
         #
@@ -834,6 +987,18 @@ def group_packages(pkgs: Iterable[_packages.Package]) -> GroupedPackages:
             all_tied_pkgs.add(pkg)
     remaining_pkgs = remaining_pkgs - all_tied_pkgs
 
+    # Find and process owner packages.
+    owner_pkgs = set(_get_owner_packages(remaining_pkgs))
+    remaining_pkgs = remaining_pkgs - owner_pkgs
+    for pkg in owner_pkgs:
+        groups.add_owner_pkg(pkg)
+
+    # Find and process partner packages.
+    partner_pkgs = set(_get_partner_packages(remaining_pkgs))
+    remaining_pkgs = remaining_pkgs - partner_pkgs
+    for pkg in partner_pkgs:
+        groups.add_partner_pkg(pkg)
+
     # Anything left over, we don't know how to deal with.
     if remaining_pkgs:
         remaining_xr_pkgs = {pkg for pkg in remaining_pkgs if is_xr_pkg(pkg)}
@@ -858,7 +1023,7 @@ def get_xr_foundation_package(
 ) -> Optional[_packages.Package]:
     """Returns the foundation package (if found)."""
     for pkg in pkgs:
-        if pkg.name.startswith(_XR_FOUNDATION + "-"):
+        if pkg.name.startswith(_isoformat.XR_FOUNDATION + "-"):
             return pkg
 
     return None

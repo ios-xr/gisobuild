@@ -412,6 +412,9 @@ class Image:
         except KeyError as error:
             raise InvalidVersionOutputError(str(error)) from error
 
+        # Cache for group information etc
+        self._content: Optional[Dict[str, Any]] = None
+
         # The capabilities and version are printed to stdout if successful
         _log.debug("Using version number %s", self._version)
 
@@ -559,6 +562,9 @@ class Image:
         """
 
         _log.debug("Querying ISO")
+        if self._content:
+            _log.debug("... used cache")
+            return self._content
 
         try:
             output = self._call_image_py_if_caps_supported(
@@ -593,7 +599,8 @@ class Image:
             except json.decoder.JSONDecodeError as error:
                 raise QueryContentError(str(error)) from error
 
-        return cast(Dict[str, Any], json_data)
+        self._content = cast(Dict[str, Any], json_data)
+        return self._content
 
     def get_repodata(self, group: str) -> str:
         """
@@ -656,10 +663,9 @@ class Image:
 
     def list_groups(self) -> List[str]:
         """List all the groups within the ISO."""
-        groups = self._call_image_py_if_caps_supported(
-            iso=self.iso, operation="list-groups", log_dir=self.log_dir,
-        )
-        return [group for group in groups.split("\n") if group != ""]
+        content = self.query_content()
+        result = list(group["name"] for group in content["groups"])
+        return result
 
     def extract_groups(self, groups: List[str], output_dir: str) -> None:
         """Extracts the specified groups to the given output directory."""

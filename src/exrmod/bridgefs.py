@@ -35,6 +35,7 @@ except ImportError:
     sys.path.append (os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir))
     import exrmod.gisobuild_exr_engine as gb
 import utils.gisoutils as gu
+import exrmod.exrutils.rpmutils as exu
 from utils.gisoglobals import *
 
 logger = logging.getLogger(__name__)
@@ -76,7 +77,7 @@ class BridgeRpmDB:
 
     def get_rpm_release (self, rpmfile):
         rpmrel = None
-        if gu.is_tp_rpm (self.platform, rpmfile):
+        if exu.is_tp_rpm (self.platform, rpmfile):
             shutil.copy (rpmfile, self.fsroot)
             os.chmod (os.path.join(self.fsroot, 
                             os.path.basename(rpmfile)), 0o644)
@@ -129,7 +130,7 @@ class BridgeRpmDB:
         extract_path = tempfile.mkdtemp (dir = self.out_dir)
         try:
             with tarfile.open(tarf, "r") as tar:
-                tar.extractall(extract_path)
+                tar_extract_all(tar, extract_path)
         except Exception as e:
             raise AssertionError ("Unable to extract {}:{}".format (
                                        tarf, e))
