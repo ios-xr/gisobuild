@@ -2,7 +2,7 @@
 
 """Helper utility definitions to extract gISO information.
 
-Copyright (c) 2022 Cisco and/or its affiliates.
+Copyright (c) 2022-2023 Cisco and/or its affiliates.
 This software is licensed to you under the terms of the Cisco Sample
 Code License, Version 1.1 (the "License"). You may obtain a copy of the
 License at
@@ -715,3 +715,17 @@ def set_user_specified_tools(args: argparse.Namespace) -> None:
             "User has specified to use the following image.py script: %s",
             _image_script,
         )
+
+
+def add_wrappers_to_path() -> None:
+    """
+    Prepend PATH with the location where wrappers around standard tools are
+    kept.
+
+    """
+    wrappers_path = str(
+        pathlib.Path(os.path.abspath(__file__)).parents[1] / "wrappers"
+    )
+
+    if not wrappers_path in os.environ["PATH"]:
+        os.environ["PATH"] = wrappers_path + os.pathsep + os.environ["PATH"]

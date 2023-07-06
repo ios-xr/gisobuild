@@ -89,6 +89,18 @@ def system_resource_check (args):
         sys.exit(-1)
     logger.info("System requirements check [PASS]")
     return
+def is_multi_arch_tp_rpms_supported(iso_mount_path: pathlib.Path) -> bool:
+    """
+        check if multi-arch TP rpms are supported by the iso
+    """
+    img_mdata = (iso_mount_path / "iosxr_image_mdata.yml")
+    data = img_mdata.read_text()
+    if (
+        "arm supported arch list" in data and 
+        "x86_64 supported arch list" in data
+    ):
+        return True
+    return False
 
 def main (argv, infile):
     global cwd
@@ -206,8 +218,20 @@ def main (argv, infile):
             rpm_db.filter_cisco_rpms_by_platform(giso.get_bundle_iso_platform_name())
 
             # 1.3.5 Filter and discard TP RPM which are not part of release-file 
-            rpm_db.filter_tp_rpms_by_release_rpm_list(
+            # rpm_db.filter_tp_rpms_by_release_rpm_list(
+            #     giso.get_bundle_iso_mount_path(), giso.get_bundle_iso_version())
+            
+            if is_multi_arch_tp_rpms_supported(
+                pathlib.Path(giso.get_bundle_iso_mount_path())):
+                rpm_db.filter_tp_rpms_by_supported_arch(
+                    pathlib.Path(giso.get_bundle_iso_mount_path()),
+                    giso.get_bundle_iso_version()
+                )
+            else:
+                rpm_db.filter_tp_rpms_by_release_rpm_list(
                 giso.get_bundle_iso_mount_path(), giso.get_bundle_iso_version())
+            
+            
 
             # 1.3.6 Filter and discard older version HOSTOS RPMS
             rpm_db.filter_multiple_hostos_spirit_boot_rpms(
@@ -281,7 +305,9 @@ def main (argv, infile):
             #       So both arm and x86_64 rpms must be present in RPM database.
             # missing_arch_rpms = [[Arm rpm list][x86_54 rpm list]]
             missing = False
-            missing_arch_rpms = rpm_db.get_missing_arch_rpm(vm_type, supp_arch)
+            missing_arch_rpms = rpm_db.get_missing_arch_rpm(
+                vm_type, supp_arch,
+                is_multi_arch_tp_rpms_supported(pathlib.Path(giso.get_bundle_iso_mount_path())))
             for arch in list(missing_arch_rpms.keys()):
                 if arch == "arm" and argv.x86_only:
                     logger.debug("Skipping arm rpms in missing_arch_rpms check as given x86_only option")

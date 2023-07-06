@@ -24,7 +24,7 @@ __all__ = (
     "RemovePkgAction",
     "compare_versions",
     "determine_output_actions",
-    "pick_main_pkgs",
+    "pick_installable_pkgs",
 )
 
 
@@ -51,6 +51,7 @@ from typing import (
 
 from . import _blocks
 from . import _file
+from . import _isoformat
 from . import _packages
 from . import _subprocs
 
@@ -458,6 +459,8 @@ def _add_blocks(
             if chosen_block_not_in_iso is not None:
                 output_pkgs.add_block(chosen_block_not_in_iso)
 
+    # @@@ Need to better handle loading a GISO that already has cust RPMs in
+
 
 def _remove_blocks(
     output_pkgs: _blocks.GroupedPackages, remove_pkgs: Sequence[str],
@@ -478,6 +481,18 @@ def _remove_blocks(
             _log.debug("%s in list of blocks to remove", block)
             output_pkgs.remove_block(block)
             handled_remove_pkgs.add(block.name)
+
+    for pkg in output_pkgs.all_owner_pkgs:
+        if pkg.name in remove_pkgs:
+            _log.debug("Owner pkg %s in list of blocks to remove", pkg)
+            output_pkgs.remove_owner_pkg(pkg)
+            handled_remove_pkgs.add(pkg.name)
+
+    for pkg in output_pkgs.all_partner_pkgs:
+        if pkg.name in remove_pkgs:
+            _log.debug("Partner pkg %s in list of blocks to remove", pkg)
+            output_pkgs.remove_partner_pkg(pkg)
+            handled_remove_pkgs.add(pkg.name)
 
     # Check whether all the user requested blocks have been removed. If they
     # haven't, then it may indicate a user input (they've used the wrong name,
@@ -534,14 +549,14 @@ def _check_duplicates(output_pkgs: _blocks.GroupedPackages) -> None:
         raise DuplicatePackagesError(duplicates)
 
 
-def pick_main_pkgs(
+def pick_installable_pkgs(
     iso_pkgs: _blocks.GroupedPackages,
     additional_pkgs: _blocks.GroupedPackages,
     add_pkg_patterns: Sequence[str],
     remove_pkgs: Sequence[str],
 ) -> _blocks.GroupedPackages:
     """
-    Pick the packages to go into the "main" group of the GISO.
+    Pick the packages to go into the installable groups of the GISO.
 
     :param iso_pkgs:
         The packages in the input iso grouped into logical blocks.
@@ -577,6 +592,20 @@ def pick_main_pkgs(
     _add_blocks(
         additional_pkgs.tie_blocks,
         iso_pkgs.tie_blocks,
+        output_pkgs,
+        add_pkg_filenames,
+        add_pkg_res,
+    )
+    _add_blocks(
+        additional_pkgs.owner_pkgs,
+        iso_pkgs.owner_pkgs,
+        output_pkgs,
+        add_pkg_filenames,
+        add_pkg_res,
+    )
+    _add_blocks(
+        additional_pkgs.partner_pkgs,
+        iso_pkgs.partner_pkgs,
         output_pkgs,
         add_pkg_filenames,
         add_pkg_res,
@@ -618,6 +647,7 @@ class RemovePkgAction(BaseAction):
 
     pkg: pathlib.Path
     iso_content: Dict[str, Any]
+    group: str
 
     def run(self, output_dir: str) -> None:
         """
@@ -640,9 +670,14 @@ class AddPkgAction(BaseAction):
 
         The path to the package to add.
 
+    .. attribute:: group
+
+        The group to which the package should be added
+
     """
 
     pkg: pathlib.Path
+    group: _isoformat.PackageGroup
 
     def run(self, output_dir: str) -> None:
         """
@@ -653,7 +688,7 @@ class AddPkgAction(BaseAction):
 
         """
         _log.debug("Adding package %s to the iso", str(self.pkg))
-        _file.add_rpm(str(self.pkg), output_dir)
+        _file.add_rpm(str(self.pkg), output_dir, group=self.group)
 
 
 def determine_output_actions(
@@ -665,11 +700,11 @@ def determine_output_actions(
     """
     Determine the actions to perform to assemble packages for the output GISO.
 
-    :param output_pkgs:
+    :param grouped_output_pkgs:
         The packages to be included in the output GISO grouped into logical
         blocks.
 
-    :param input_pkgs:
+    :param grouped_input_pkgs:
         The packages in the input ISO grouped into logical blocks.
 
     :param pkg_to_filepath:
@@ -686,11 +721,16 @@ def determine_output_actions(
         directory.
 
     """
-    output_pkgs = grouped_output_pkgs.get_all_pkgs()
-    input_pkgs = grouped_input_pkgs.get_all_pkgs()
     actions: List[BaseAction] = []
-    for pkg in input_pkgs - output_pkgs:
-        actions.append(RemovePkgAction(pkg_to_filepath[pkg], iso_content))
-    for pkg in output_pkgs - input_pkgs:
-        actions.append(AddPkgAction(pkg_to_filepath[pkg]))
+    for group in _isoformat.PackageGroup:
+        output_pkgs = grouped_output_pkgs.get_all_pkgs(group)
+        input_pkgs = grouped_input_pkgs.get_all_pkgs(group)
+        for pkg in input_pkgs - output_pkgs:
+            actions.append(
+                RemovePkgAction(
+                    pkg_to_filepath[pkg], iso_content, group=group.group_name
+                )
+            )
+        for pkg in output_pkgs - input_pkgs:
+            actions.append(AddPkgAction(pkg_to_filepath[pkg], group=group))
     return actions

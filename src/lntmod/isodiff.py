@@ -3,7 +3,7 @@
 
 """ Wrapper script to generate a diff between two ISOs.
 
-Copyright (c) 2022 Cisco and/or its affiliates.
+Copyright (c) 2022-2023 Cisco and/or its affiliates.
 This software is licensed to you under the terms of the Cisco Sample
 Code License, Version 1.1 (the "License"). You may obtain a copy of the
 License at
@@ -22,10 +22,14 @@ or implied.
 __all__ = ()
 
 
+import os
 import pathlib
 import sys
 
-sys.path.append(str(pathlib.Path(__file__).parents[1]))
+# The use of abspath() is to address an issue with python3.6 where if isols.py
+# is run from the directory where the file is located the value of __file__ is
+# just ./isols.py rather than an absolute path.
+sys.path.append(str(pathlib.Path(os.path.abspath(__file__)).parents[1]))
 from lnt import tools
 
 

@@ -2,7 +2,7 @@
 
 """ Tool to generate a diff between two ISOs.
 
-Copyright (c) 2022 Cisco and/or its affiliates.
+Copyright (c) 2022-2023 Cisco and/or its affiliates.
 This software is licensed to you under the terms of the Cisco Sample
 Code License, Version 1.1 (the "License"). You may obtain a copy of the
 License at
@@ -474,8 +474,10 @@ def _get_package_lists(
     ]:
         for group in iso.list_groups():
             try:
-                mdata = elemtree.fromstring(iso.get_repodata(group))
+                repodata = iso.get_repodata(group)
+                mdata = elemtree.fromstring(repodata)
             except elemtree.ParseError as error:
+                print(f"BADREPODATA: {repodata}")
                 raise image.GetRepoDataError(iso, group, str(error)) from error
 
             # Strip the namespace data for easier parsing.
@@ -811,6 +813,7 @@ def run(argv: List[str]) -> None:
     _log.info("Invoked as '%s'", " ".join(sys.argv))
 
     try:
+        gisoutils.add_wrappers_to_path()
         run_iso_diff(args)
     except Exception as error:
         _log.error(

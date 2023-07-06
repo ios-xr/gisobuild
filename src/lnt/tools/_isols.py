@@ -2,7 +2,7 @@
 
 """ Tool to extract ISO information.
 
-Copyright (c) 2022 Cisco and/or its affiliates.
+Copyright (c) 2022-2023 Cisco and/or its affiliates.
 This software is licensed to you under the terms of the Cisco Sample
 Code License, Version 1.1 (the "License"). You may obtain a copy of the
 License at
@@ -28,7 +28,7 @@ import os
 import sys
 import tempfile
 
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Union, cast, Optional
 
 from .. import lnt_gisoglobals as isoglobals
 from .. import (
@@ -235,6 +235,7 @@ def list_packages(
     iso: image.Image,
     *,
     rpms: bool = False,
+    group_tags: Optional[List[str]] = None,
     groups: bool = False,
     print_json: bool = False,
 ) -> None:
@@ -254,14 +255,28 @@ def list_packages(
         Print the output in JSON format
 
     """
+
+    def group_has_attr(group_info: dict[str, Any], attr_name: str) -> bool:
+        return any(
+            cast(str, attr["name"]) == attr_name
+            for attr in group_info["attrs"]
+        )
+
     assert (
         rpms ^ groups
     ), "Only one of rpm or group can be specified for listing packages"
 
     # Determine set of groups to list
+    if group_tags is None:
+        group_tags = ["install", "owner_packages", "partner_packages"]
     if rpms:
         # List all packages forming part of the main install
-        groups_to_list = ["main"]
+        group_info = iso.query_content()["groups"]
+        groups_to_list = [
+            group["name"]
+            for group in group_info
+            if any(group_has_attr(group, attr) for attr in group_tags)
+        ]
     elif groups:
         groups_to_list = iso.list_groups()
     else:
@@ -273,10 +288,12 @@ def list_packages(
     }
 
     if rpms:
+        all_packages: list[str] = sum(group_packages.values(), [])
         if print_json:
-            _print_json_data(group_packages["main"])
-        elif group_packages["main"]:
-            print("\n".join(group_packages["main"]))
+            _print_json_data(sorted(all_packages))
+        else:
+            if all_packages:
+                print("\n".join(sorted(all_packages)))
     else:
         if print_json:
             _print_json_data(group_packages)
@@ -400,6 +417,21 @@ def _run_isols_cmds(args: argparse.Namespace) -> None:
         display_fixes(iso, print_json=args.json)
     elif args.RPMS:
         list_packages(iso, rpms=True, print_json=args.json)
+    elif args.XRPACKAGES:
+        list_packages(
+            iso, rpms=True, group_tags=["install"], print_json=args.json
+        )
+    elif args.OWNERPACKAGES:
+        list_packages(
+            iso, rpms=True, group_tags=["owner_packages"], print_json=args.json
+        )
+    elif args.PARTNERPACKAGES:
+        list_packages(
+            iso,
+            rpms=True,
+            group_tags=["partner_packages"],
+            print_json=args.json,
+        )
     elif args.GROUPS:
         list_packages(iso, groups=True, print_json=args.json)
     elif args.DUMP_MDATA:
@@ -491,6 +523,27 @@ def _parse_args(argv: List[str]) -> argparse.Namespace:
         action="store_true",
     )
     isols_group.add_argument(
+        "--owner-packages",
+        dest="OWNERPACKAGES",
+        default=False,
+        help="List all owner package RPMs in the ISO",
+        action="store_true",
+    )
+    isols_group.add_argument(
+        "--partner-packages",
+        dest="PARTNERPACKAGES",
+        default=False,
+        help="List all partner package RPMs in the ISO",
+        action="store_true",
+    )
+    isols_group.add_argument(
+        "--xr-packages",
+        dest="XRPACKAGES",
+        default=False,
+        help="List all Cisco IOS XR RPMs in the ISO",
+        action="store_true",
+    )
+    isols_group.add_argument(
         "--groups",
         dest="GROUPS",
         default=False,
@@ -533,6 +586,7 @@ def run(argv: List[str]) -> None:
     _log = gisoutils.init_logging(args.log_dir, _LOGFILE, disable=args.no_logs)
 
     try:
+        gisoutils.add_wrappers_to_path()
         _validate_args(args)
         _run_isols_cmds(args)
     except Exception as error:

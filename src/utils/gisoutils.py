@@ -23,6 +23,8 @@ import json
 import shutil
 import sys
 import os
+from pathlib import Path
+from tarfile import TarFile
 import textwrap
 import logging
 from logging import handlers
@@ -308,3 +310,28 @@ def create_checksum_file(
         }
     with open(os.path.join(directory, checksum_file), "w") as f:
         json.dump(checksum_data, f)
+
+
+def tar_extract_all(tar: TarFile, path: Path) -> None:
+    """
+    Safely extract tarfile contents avoiding the risk of a malicious tarfile
+    containing elements with absolute paths, or relative paths writing outside
+    the intended extract location, or symlinks that could potentially then be
+    used in combination with the extract path of another member to cause that
+    member to be written outside the intended extract location.
+    """
+    for elt in tar.getmembers():
+        if (
+            elt.name.startswith("/")
+            or os.path.normpath(elt.name).startswith("../")
+            or elt.issym()
+        ):
+            raise AssertionError(
+                "Attempted path traversal with {} {} in {!s}".format(
+                    "symlink" if elt.issym() else "filename",
+                    elt.name,
+                    tar.name,
+                )
+            )
+
+    tar.extractall(path)

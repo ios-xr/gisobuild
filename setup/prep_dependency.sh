@@ -43,6 +43,8 @@ case " $ID $ID_LIKE " in
         ;;
 esac
 
+
+
 if [ -n "$use_apt" ]; then
     # Debian-based distro
     PKGS=(

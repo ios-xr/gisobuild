@@ -337,6 +337,16 @@ class Package:
         """Indicates whether the package is a third party package."""
         return "cisco-iosxr" not in {p.name for p in self.provides}
 
+    @property
+    def is_owner_package(self) -> bool:
+        """Indicates whether this is a package produced by the device owner"""
+        return self.name.startswith("owner-")
+
+    @property
+    def is_partner_package(self) -> bool:
+        """Indicates whether this is a package produced by a Cisco partner"""
+        return self.name.startswith("partner-")
+
     def __str__(self) -> str:
         """Return the canonical name for this package."""
         # Possible output formats are:

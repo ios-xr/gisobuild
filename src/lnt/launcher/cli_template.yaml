@@ -21,7 +21,7 @@
 #                       be writable by the builder and must not contain a
 #                       previously built artefact with the same name
 # --remove-packages     Remove RPMS for the given package names, specified in
-#                       a comma separated list
+#                       a space separated list
 # --remove-rpms-matching-pattern
 #                       Remove RPMs matching the specified pattern.
 #                       Put in quotes e.g. 'pkg*'
