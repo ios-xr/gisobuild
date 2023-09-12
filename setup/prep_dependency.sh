@@ -53,6 +53,7 @@ if [ -n "$use_apt" ]; then
         file
         genisoimage
         gzip
+        libcdio-utils
         openssl
         p7zip-full
         python3
@@ -61,6 +62,8 @@ if [ -n "$use_apt" ]; then
         python3-rpm
         rpm
         squashfs-tools
+        unzip
+        zip
     )
     set -e
     apt-get update
@@ -84,6 +87,7 @@ elif [ -n "$use_rpm" ]; then
         file
         genisoimage
         gzip
+        libcdio
         openssl
         p7zip-plugins
         python3
@@ -91,6 +95,8 @@ elif [ -n "$use_rpm" ]; then
         python3-rpm
         rpm
         squashfs-tools
+        unzip
+        zip
     )
     set -e
     if [ -n "$install_epel" ]; then

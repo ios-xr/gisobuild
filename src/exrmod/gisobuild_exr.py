@@ -26,10 +26,25 @@ import json
 import os
 import logging
 import sys
+import subprocess
+import pathlib
+import yaml
+import glob
 
 cwd = os.getcwd()
 MODULE_NAME = os.path.basename(__file__).split(".")[0]
 DFLT_OUTPUT_DIR = os.path.join(cwd, "output_{}".format(MODULE_NAME))
+
+class USBZipFailure(Exception):
+    '''
+        Error Raised when USB Boot Zip creation fails.
+        error code:
+        1 -- script doesn't exist.
+        2 -- script exists but failed to run/create USB boot zip. 
+    '''
+    def __init__(self, err_code: int, msg: str) -> None:
+        super().__init__(msg)
+        self.err_code = err_code
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +117,42 @@ def is_multi_arch_tp_rpms_supported(iso_mount_path: pathlib.Path) -> bool:
         return True
     return False
 
+def create_usb_zip(giso_path:str, platform:str):
+    platform_scripts = \
+        pathlib.Path(__file__).parent / "usb_zip" / "platform_scripts.yaml"
+    supported_platforms = yaml.safe_load(platform_scripts.read_text())
+    if not platform in supported_platforms:
+        raise USBZipFailure( 1, f"USB_Boot_zip creation FAILED: {platform} Platform not supported.")
+    zip_script = platform_scripts.parent / supported_platforms[platform]
+    try:
+        logger.debug(f"Running: {zip_script} {platform} {giso_path}")
+        op = subprocess.run(f"{zip_script} {platform} {giso_path}",
+                            shell=True,
+                            check=True,
+                            stderr=subprocess.PIPE,
+                            stdout=subprocess.PIPE)
+        # Zip file created - ncs5500-usb_boot.zip
+        stdout = op.stdout.decode().split('\n')
+        zip_name = None
+        for line in stdout:
+            if "Zip file created" in line:
+                zip_name = line.split('-', 1)[-1].strip()
+                break
+        if zip_name and (pathlib.Path(giso_path).parent / zip_name).exists():
+            return zip_name
+        else:
+            logger.debug(
+                f"ERROR USB_BOOT_ZIP:\nSTDOUT:{op.stdout.decode()}\nSTDERR:{op.stderr.decode()}\n"
+            )
+            raise USBZipFailure(
+                2,
+                "USB_Boot_zip creation FAILED!: Unable to get zip file name."
+            )
+    except subprocess.CalledProcessError as cpe:
+        logger.error(f"\nSTDOUT:\n{cpe.stdout.decode()}\nSTDERR:\n{cpe.stderr.decode()}\n")
+        raise USBZipFailure(
+            2, "USB_Boot_zip creation FAILED!: script failed to run!") from cpe
+    
 def main (argv, infile):
     global cwd
 
@@ -395,24 +446,51 @@ def main (argv, infile):
            giso.do_extend_clean(giso.ExtendRpmRepository)
         rpm_db.cleanup_tmp_repo_path()
         files_to_checksum = set()
+        if argv.optimize and argv.in_docker:
+            giso_dir = "/app/signing_env"
+        else:
+            giso_dir = cwd
         if not result:
             logger.info('\n\t...Golden ISO creation SUCCESS.')
             logger.info('\nGolden ISO Image Location: %s/%s' %
-                        (cwd, giso.giso_name))
+                        (giso_dir, giso.giso_name))
             img_name_file = 'img_built_name.txt'
-            with open(img_name_file, "w") as f:
+            with open(os.path.join(giso_dir,img_name_file), "w") as f:
                 f.write(giso.giso_name)
             files_to_checksum.add(giso.giso_name)
             files_to_checksum.add(img_name_file)
             files_to_checksum.add("rpms_packaged_in_giso.txt")
+            logger.info("Creating USB Boot zip...")
+            try:
+                zip_name = create_usb_zip(os.path.join(cwd, giso.giso_name), giso.platform)
+                files_to_checksum.add(zip_name)
+                logger.info(f"USB Boot Zip: {zip_name}")
+            except USBZipFailure as uzf:
+                if uzf.err_code == 1:
+                    logger.info(
+                        f"Skipping USB Boot Zip creation: Not supported for platform: {giso.platform}")
+                    logger.info(
+                        f"USB BOOT ZIP NEEDED?: Contact {giso.platform} team to add support."
+                    )
+                elif uzf.err_code == 2:
+                    logger.info(
+                        f"!!USB CREATION FAILED!! Contact {giso.platform} team for resolution!"
+                    )
+                    logger.info("Continuing without USB Boot Zip ...")
         if giso.is_tar_require:
             with Migtar() as migtar:
                 logger.info('\nBuilding Migration tar...')
-                migtar.create_migration_tar(cwd, giso.giso_name)
+                migtar.create_migration_tar(giso_dir, giso.giso_name)
                 logger.info('\nMigration tar creation SUCCESS.')
                 logger.info('\nMigration tar Location: %s/%s' %
-                            (cwd, migtar.dst_system_tar))
+                            (giso_dir, migtar.dst_system_tar))
                 files_to_checksum.add(migtar.dst_system_tar)
         if argv.create_checksum:
-            gisoutils.create_checksum_file(cwd, files_to_checksum, gglobals.CHECKSUM_FILE_NAME)
+            gisoutils.create_checksum_file(giso_dir, files_to_checksum, gglobals.CHECKSUM_FILE_NAME)
+        
+        if argv.optimize and argv.in_docker:
+            files_to_copy = files_to_checksum.copy()
+            files_to_copy.add("checksums.json")
+            for f in files_to_copy:
+                shutil.move(os.path.join(giso_dir,os.path.basename(f)), argv.out_directory)
         sys.exit(0)

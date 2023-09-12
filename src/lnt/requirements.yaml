@@ -58,6 +58,20 @@ executable_requirements:
       - p7zip-plugins
     apt_get_names:
       - p7zip-full
+  - name: iso-read
+    optional: true
+    yum_names:
+      - libcdio
+    apt_get_names:
+      - libcdio-utils
+  - name: zip
+    optional: true
+    package_names:
+      - zip
+  - name: unzip
+    optional: true
+    package_names:
+      - unzip
           
 
 

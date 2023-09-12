@@ -109,7 +109,7 @@ def copy_artefacts (
     src_log_dir = src_dir / _CTR_LOG_DIR
     log_dir.mkdir(parents=True, exist_ok=True)
     import re
-    re_list = [".*\.txt", "checksums\.json", ".*-golden.*"]
+    re_list = [".*\.txt", "checksums\.json", ".*-golden.*", ".*\.zip"]
     artifact_reg = re.compile( '|'.join( re_list) )
     tmp_artifact_dir = src_dir
     for item in tmp_artifact_dir.iterdir():

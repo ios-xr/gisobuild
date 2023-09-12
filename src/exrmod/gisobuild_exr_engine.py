@@ -2886,7 +2886,11 @@ class Giso:
         duplicate_xr_rpms = []
         duplicate_calv_rpms = []
         duplicate_host_rpms = []
-        with open('rpms_packaged_in_giso.txt',"w") as fdr:
+        if os.path.exists("/app/signing_env"):
+            f_giso_rpms =  '/app/signing_env/rpms_packaged_in_giso.txt'
+        else:
+            f_giso_rpms =  'rpms_packaged_in_giso.txt'
+        with open(f_giso_rpms,"w") as fdr:
             for vm_type in Giso.VM_TYPE:
                 rpm_files = self.vm_rpm_file_paths[vm_type]
                 if rpm_files is not None:
@@ -3397,6 +3401,11 @@ class Giso:
         """ Pretend to be in workspace as thats a requirement for signing and
             get platforms .cer and .der files
         """
+        signing_env = pathlib.Path("/app/signing_env")
+        if signing_env.exists():
+            logger.info("\nSigning environment exists! Reusing ...")
+            os.chdir(signing_env)
+            return
         logger.info("\nCreating signing environment...\n")
         logger.debug("ISO path: %s" %(self.bundle_iso.get_iso_path()))
         plat = self.get_bundle_iso_platform_name()
@@ -3523,7 +3532,6 @@ def readiso(iso_file, out_dir):
     ISOINFO="isoinfo"
     DIR_PREFIX="Directory listing of /"
 
-    pwd = cwd
     cmd = ("%s -R -l -i %s "%(ISOINFO,iso_file))
     result = run_cmd(cmd) 
     status = result["rc"]

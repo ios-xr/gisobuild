@@ -148,7 +148,7 @@ CHECKSUM_FILE_NAME = "checksums.json"
 # This image version *MUST* be updated whenever the built container changes
 # (e.g. Dockerfile change).
 IMAGE_NAME = "cisco-xr-gisobuild"
-IMAGE_VERSION = "2.3.3"
+IMAGE_VERSION = "2.3.4"
 
 CTR_OUT_DIR = pathlib.Path(
     tempfile.TemporaryDirectory(prefix="output_gisobuild-").name

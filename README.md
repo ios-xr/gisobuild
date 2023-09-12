@@ -120,6 +120,9 @@ This tool has the following executable requirements:
 * openssl
 * unsquashfs
 * 7z (Optional - but functionality may be reduced without)
+* iso-read (Optional - but functionality may be reduced without)
+* zip (Optional - but functionality may be reduced without)
+* unzip (Optional - but functionality may be reduced without)
 
 It also requires the following Python (>= 3.6) modules:
 * dataclasses
