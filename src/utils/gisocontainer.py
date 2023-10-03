@@ -544,7 +544,7 @@ def _execute_build(cli_args: argparse.Namespace) -> None:
     unified_repo = unify_staging(cli_args)
     infile = system_build_prep_env(cli_args)
     logger.info("Setting up container environment...")
-    if cli_args.exriso and cli_args.optimize:
+    if cli_args.exriso and (hasattr(cli_args, 'optimize') and cli_args.optimize):
         image = _build_optim_image()
     else:
         image = _ensure_image()

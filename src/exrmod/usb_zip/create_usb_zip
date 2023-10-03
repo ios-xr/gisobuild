@@ -96,8 +96,16 @@ if [ -e $2 ]; then
   EFI_DIR=$STG_DIR/EFI/boot
   IMG_DIR=$STG_DIR/boot
   ISO_FILE=$(cd $(dirname $2); pwd)/$(basename $2)
+  if [[ $ISO_FILE =~ "golden" ]]; then
+      ISO_VERSION=`isoinfo -i $2 -R -x /giso_info.txt | grep Version: | cut -d ' ' -f2`
+  fi
   PLAT=$1
-  ZIP_FILE=$PLAT-usb_boot.zip
+  if [[ $ISO_FILE =~ "golden" ]]; then
+      ZIP_FILE=$PLAT-usb_boot-$ISO_VERSION.zip
+  else
+      ZIP_FILE=$PLAT-usb_boot.zip
+  fi
+
   PLAT_DIR=$STG_DIR/$1
   if [ $PLAT == "iosxrwbd" ]; then
       ISOREAD=$(which /auto/thirdparty-sdk/bin/isoread)
