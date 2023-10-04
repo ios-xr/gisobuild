@@ -39,13 +39,7 @@ import sys
 import tempfile
 import types
 
-from typing import (
-    Iterator,
-    List,
-    NoReturn,
-    Optional,
-    Tuple,
-)
+from typing import Iterator, List, NoReturn, Optional, Tuple, Dict
 
 from . import gisoutils
 from . import _subprocs
@@ -220,6 +214,14 @@ def _get_volumes_to_mount(args: argparse.Namespace, infile: str) -> List[str]:
     if args.bridge_fixes:
         for repo in args.bridge_fixes:
             vol_map_list.append(os.path.normpath(repo))
+
+    if args.optimize:
+        o_path = pathlib.Path(__file__).parents[3] / "exr"
+        if str(o_path) not in sys.path:
+            sys.path.append(str(o_path))
+        import exr  # pylint: disable=import-error
+
+        vol_map_list.extend(exr.VOLUMES)
 
     return list(set(vol_map_list))
 
@@ -420,7 +422,12 @@ def _build_giso(
         Name and tag of the image to use.
 
     """
-    src_dir = _find_dockerfile().parent / "src"
+    if args.optimize:
+        # We mount the tool one label up instead of 'src' so as to expose
+        # signing tools to the gisobuild script.
+        src_dir = _find_dockerfile().parents[1]
+    else:
+        src_dir = _find_dockerfile().parent / "src"
     giso_build_cmd = []
     giso_build_cmd.extend([_containertool, "run", "--name", container_name])
     giso_build_cmd.extend(["-v", f"{str(src_dir)}:/app/gisobuild:ro"])
@@ -430,10 +437,28 @@ def _build_giso(
             for vol in _get_volumes_to_mount(args, infile)
         )
     )
-    giso_build_cmd.extend(
-        [image, "/app/gisobuild/gisobuild.py", "--yamlfile", infile]
-    )
+    if args.optimize:
+        # Creating the signing environment and mounting it at '/app/signing_env'
+        # of the container.
+        signing_env = _pull_signing_env(args)
+        giso_build_cmd.extend(["-v", f"{signing_env}:/app/signing_env"])
+        for var_name, value in _get_env_vars().items():
+            giso_build_cmd.extend(["-e", f"{var_name}={value}"])
+    if args.optimize:
+        giso_build_cmd.extend(
+            [
+                image,
+                "/app/gisobuild/giso/src/gisobuild.py",
+                "--yamlfile",
+                infile,
+            ]
+        )
+    else:
+        giso_build_cmd.extend(
+            [image, "/app/gisobuild/gisobuild.py", "--yamlfile", infile]
+        )
     try:
+        logger.debug(giso_build_cmd)
         result = _subprocs.execute(giso_build_cmd, verbose_logging=False)
     except _subprocs.CalledProcessError as error:
         _fatal_error_from_subprocess("GISO build", error)
@@ -519,7 +544,11 @@ def _execute_build(cli_args: argparse.Namespace) -> None:
     unified_repo = unify_staging(cli_args)
     infile = system_build_prep_env(cli_args)
     logger.info("Setting up container environment...")
-    image = _ensure_image()
+    if cli_args.exriso and (hasattr(cli_args, 'optimize') and cli_args.optimize):
+        image = _build_optim_image()
+    else:
+        image = _ensure_image()
+    logger.info("Container Image: %s", image)
     container_name = _gen_container_name()
     try:
         container.setup_copy_out_directory(cli_args)
@@ -537,6 +566,13 @@ def _execute_build(cli_args: argparse.Namespace) -> None:
                 [_containertool, "rm", "-f", container_name],
                 verbose_logging=False,
             )
+            if cli_args.optimize and cli_args.in_docker:
+                _subprocs.execute(
+                    [_containertool, "rmi", "-f", image], verbose_logging=False
+                )
+                dirs = glob.glob(f"{cli_args.out_directory}/signing_env-*")
+                for _dir in dirs:
+                    shutil.rmtree(_dir)
         except RuntimeError:
             _fatal_error("GISO build failed. Nothing to stage.")
         except _subprocs.CalledProcessError:
@@ -578,3 +614,37 @@ def execute_build(args: argparse.Namespace) -> None:
     except Exception as exc:
         logger.exception("Exiting with an unhandled error:")
         _fatal_error(f"GISO build failed: {str(exc)}", prefix="")
+
+
+def _build_optim_image() -> str:
+    """
+    builds a docker image for optimized gisobuild for eXR platforms and returns
+    the name:tag of the image.
+    """
+    o_path = pathlib.Path(__file__).parents[3] / "exr"
+    if str(o_path) not in sys.path:
+        sys.path.append(str(o_path))
+    import exr  # pylint: disable=import-error
+
+    return exr.build_optim_image()
+
+
+def _pull_signing_env(cli_args: argparse.Namespace) -> str:
+    """
+        Create the signing environment used for sign the image.
+    """
+    o_path = pathlib.Path(__file__).parents[3] / "exr"
+    if str(o_path) not in sys.path:
+        sys.path.append(str(o_path))
+    import exr  # pylint: disable=import-error
+
+    return exr.pull_signing_env(cli_args)
+
+
+def _get_env_vars() -> Dict[str, str]:
+    o_path = pathlib.Path(__file__).parents[3] / "exr"
+    if str(o_path) not in sys.path:
+        sys.path.append(str(o_path))
+    import exr  # pylint: disable=import-error
+
+    return exr.ENV_VARS
