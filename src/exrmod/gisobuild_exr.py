@@ -446,7 +446,7 @@ def main (argv, infile):
            giso.do_extend_clean(giso.ExtendRpmRepository)
         rpm_db.cleanup_tmp_repo_path()
         files_to_checksum = set()
-        if argv.optimize and argv.in_docker:
+        if hasattr(argv, 'optimize') and argv.optimize and argv.in_docker:
             giso_dir = "/app/signing_env"
         else:
             giso_dir = cwd
@@ -488,7 +488,7 @@ def main (argv, infile):
         if argv.create_checksum:
             gisoutils.create_checksum_file(giso_dir, files_to_checksum, gglobals.CHECKSUM_FILE_NAME)
         
-        if argv.optimize and argv.in_docker:
+        if hasattr(argv, 'optimize') and argv.optimize and argv.in_docker:
             files_to_copy = files_to_checksum.copy()
             files_to_copy.add("checksums.json")
             for f in files_to_copy:
