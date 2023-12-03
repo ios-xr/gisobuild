@@ -129,6 +129,27 @@ def run_cmd2 (cmd):
             out = error
             raise RuntimeError("Error CMD=%s returned --->%s" % (cmd, out))
     return out.strip()
+def is_satisfied_ignoring_epoch(req: str, rpm_dir: str) -> bool:
+    '''
+        Check if requirement: "req" is met by the rpms in: "rpm_dir" without
+        taking rpm epoch into account.
+    '''
+    r_name, r_ver = req.split('=', 1)
+    r_name = r_name.strip()
+    r_ver = r_ver.strip()
+    cmd = f"rpm -qp --provides {rpm_dir}/*rpm"
+    cp = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE)
+    for line in cp.stdout.decode().split("\n"):
+        if '=' in line:
+            name, version = line.split('=', 1)
+            name = name.strip()
+            version = version.strip()
+            if(r_name in name):
+                if re.match(r"[\d\:]*{}".format(r_ver), version):
+                    lop = line.rsplit('-', 1)[0]
+                    logger.debug(f"Ignoring epoch:{req} is equivalent to {lop}")
+                    return True
+    return False
 
 class Migtar:
     ISO="iso"
@@ -2127,6 +2148,18 @@ class Iso(object):
                     continue
                 elif 'signature: NOKEY' in line :
                     logger.debug("Ignoring RPM signing ")
+                    continue
+                # Hack to ignore epoch if its present
+                elif re.match(r"(?P<dep>.*)\s+is needed by.*", line):
+                    m = re.match(r"(?P<dep>.*)\s+is needed by.*", line)
+                    fn = m.group("dep")
+                    if '>=' in fn or '<=' in fn:
+                        err_log.append(line)
+                        continue
+                    if is_satisfied_ignoring_epoch(fn.strip(), f"{self.iso_extract_path}/rpms/"):
+                        continue
+                    else:
+                        err_log.append(line)
                     continue
                 else: 
                     err_log.append(line)
