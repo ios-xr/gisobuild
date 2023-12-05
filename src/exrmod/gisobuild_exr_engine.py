@@ -2149,7 +2149,7 @@ class Iso(object):
                 elif 'signature: NOKEY' in line :
                     logger.debug("Ignoring RPM signing ")
                     continue
-                # Hack to ignore epoch if its present
+                # Ignore epoch (if present) from provide info for compatibility check
                 elif re.match(r"(?P<dep>.*)\s+is needed by.*", line):
                     m = re.match(r"(?P<dep>.*)\s+is needed by.*", line)
                     fn = m.group("dep")
