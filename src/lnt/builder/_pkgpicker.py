@@ -34,7 +34,6 @@ import logging
 import pathlib
 import re
 import sys
-
 from typing import (
     Any,
     Dict,
@@ -48,13 +47,7 @@ from typing import (
     TypeVar,
 )
 
-
-from . import _blocks
-from . import _file
-from . import _isoformat
-from . import _packages
-from . import _subprocs
-
+from . import _blocks, _file, _isoformat, _packages, _subprocs
 
 _log = logging.getLogger(__name__)
 

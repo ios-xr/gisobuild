@@ -44,7 +44,9 @@ def system_resource_prep (args):
 
     tempdir = tempfile.mkdtemp (prefix = os.path.join(args.out_directory, ""))
     cliConfig_file = os.path.join (tempdir, "cliConfig.yaml")
-    
+    import subprocess
+    subprocess.run(f"chmod -R 777 {cliConfig_file}", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    subprocess.run(f"chmod -R 777 {args.out_directory}", shell=True)
     args_dict = args.__dict__.copy()
     args_dict ["cli_yaml"] = None
     args_dict ["docker"] = False

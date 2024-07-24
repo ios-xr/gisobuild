@@ -26,5 +26,4 @@ __all__ = (
 
 
 from ._isodiff import run as isodiff
-
 from ._isols import run as isols

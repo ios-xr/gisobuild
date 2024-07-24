@@ -20,12 +20,14 @@ or implied.
 
 __all__ = (
     "EVRA",
-    "Version",
-    "PackageDep",
-    "Package",
-    "UnspecifiedRPMAttrError",
     "get_packages_from_repodata",
     "get_packages_from_rpm_files",
+    "Package",
+    "PackageDep",
+    "packages_to_file_paths",
+    "UnspecifiedRPMAttrError",
+    "Version",
+    "XRVersion",
 )
 
 
@@ -34,9 +36,8 @@ import hashlib
 import logging
 import os
 import pathlib
-
+import re
 from typing import (
-    cast,
     Collection,
     Dict,
     FrozenSet,
@@ -48,16 +49,14 @@ from typing import (
     Set,
     Tuple,
     Union,
+    cast,
 )
-
 from xml.etree.ElementTree import Element, ElementTree
 
 import defusedxml.ElementTree as elemtree  # type: ignore
 
-from . import _multiprocessing
-from . import _runrpm
 from .. import gisoutils
-
+from . import _multiprocessing, _runrpm
 
 _log = logging.getLogger(__name__)
 
@@ -130,6 +129,96 @@ def _get_attribute(data: Element, tag: str) -> str:
 
 
 @dataclasses.dataclass(frozen=True)
+class XRVersion:
+    """
+    Represents an XR version containing methods to compare with another version.
+
+    .. attribute:: xrversion
+
+        The XR version string.
+
+    """
+
+    xrversion: str
+    _re_form: str = r"^\d+\.\d+\.\d+(\.\d+[A-Z])?$"
+
+    def __post_init__(self) -> None:
+        if not re.match(self._re_form, self.xrversion):
+            raise ValueError(
+                f"XR version {self.xrversion} is not in the form a.b.c(.dI)"
+            )
+
+    def __bool__(self) -> bool:
+        """
+        Check if the version is set.
+
+        :return:
+            True if the version is set, False otherwise.
+        """
+        return bool(self.xrversion)
+
+    def __eq__(self, other: object) -> bool:
+        """
+        Compare two XR versions.
+
+        :param other:
+            The other XRVersion object to compare to.
+
+        :return:
+            True if this version is equal to the other version, False otherwise.
+        """
+        if isinstance(other, str):
+            return self.xrversion == other
+
+        if not isinstance(other, XRVersion):
+            raise TypeError(
+                f"Cannot compare XRVersion object with {type(other)}"
+            )
+        return self.xrversion == other.xrversion
+
+    def __gt__(self, _other: object) -> bool:
+        """
+        Compare two XR versions.
+
+        :param _other:
+            The other object to compare to. Can be a correctly formatted string,
+            or another XRVersion object.
+
+        :return:
+            True if this version is greater than the other version, False
+            otherwise.
+        """
+        if isinstance(_other, str):
+            other = XRVersion(_other)
+        elif not isinstance(_other, XRVersion):
+            raise TypeError(
+                f"Cannot compare XRVersion object with {type(_other)}"
+            )
+        else:
+            assert isinstance(_other, XRVersion)
+            other = _other
+
+        # Remove letter for internal version when splitting into components
+        my_xrversion = re.sub(r"[A-Z]$", "", self.xrversion)
+        their_xrversion = re.sub(r"[A-Z]$", "", other.xrversion)
+
+        me = [int(n) for n in my_xrversion.split(".")]
+        them = [int(n) for n in their_xrversion.split(".")]
+
+        for i, j in zip(
+            me, them
+        ):  # Drop internal version if one doesn't have it
+            if i > j:
+                return True
+            if j > i:
+                return False
+        return False
+
+    def __str__(self) -> str:
+        return self.xrversion
+
+
+@dataclasses.dataclass(frozen=True)
 class Version:
     """
     Represents a package version containing methods to split into constituents.
@@ -164,12 +253,15 @@ class Version:
             return ("", self.version)
 
     @property
-    def xr_version(self) -> str:
+    def xr_version(self) -> Optional[XRVersion]:
         """
         Get the XR version out of the full RPM version string.
 
         """
-        return self._split()[0]
+        xrversion = self._split()[0]
+        if xrversion:
+            return XRVersion(xrversion)
+        return None
 
     @property
     def pkg_version(self) -> str:
@@ -291,7 +383,7 @@ class PackageDep:
             raise RepodataMissingMandatoryAttrError("name")
 
         flags = _get_attribute(repodata, "flags")
-        version = _get_attribute(repodata, "version")
+        version = _get_attribute(repodata, "ver")
 
         return cls(name=name, flags=flags, version=version)
 
@@ -461,10 +553,9 @@ class Package:
         assert name, "Cannot determine name for package from XML"
         arch = _get_item(repodata, "arch")
         version_data = _get_elem(repodata, "version")
-
-        if version_data:
+        if version_data is not None:
             epoch = _get_attribute(version_data, "epoch")
-            version = _get_attribute(version_data, "version")
+            version = _get_attribute(version_data, "ver")
             release = _get_attribute(version_data, "rel")
         else:
             epoch = ""

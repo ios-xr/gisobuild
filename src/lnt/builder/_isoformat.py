@@ -18,12 +18,18 @@ or implied.
 
 """
 
-__all__ = ("PackageGroup",)
+__all__ = (
+    "get_installable_groups",
+    "PackageGroup",
+)
 
 import dataclasses
 import enum
 import json
-from typing import Optional, Set
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set
+
+from .. import gisoutils, lnt_gisoglobals
 
 
 @dataclasses.dataclass(frozen=True)
@@ -75,6 +81,24 @@ INSTALLABLE_PKG_GROUP_ATTRS = [
 ]
 
 
+def get_installable_groups(groups_mdata: List[Dict[str, Any]]) -> Set[str]:
+    """
+    Return the set of names for the installable package groups.
+
+    :param groups_mdata:
+        ISO groups metadata, as returned from query-content.
+
+    :returns:
+        Set of names of installable groups.
+    """
+    installable_groups = set()
+    for attr in INSTALLABLE_PKG_GROUP_ATTRS:
+        installable_groups.update(
+            gisoutils.get_groups_with_attr(groups_mdata, attr)
+        )
+    return installable_groups
+
+
 class PackageGroup(enum.Enum):
     """
     Groups into which we put packages in the ISO
@@ -107,20 +131,23 @@ ISO_GROUP_PKG_DIR = "groups/group.{}/packages"
 ISO_GROUP_ATTR_DIR = "groups/group.{}/attributes"
 ISO_GROUP_ATTR_FILE = "groups/group.{}/attributes/{}.attr.json"
 
-ISO_PATH_MISC = "misc"
+ISO_PATH_MISC = Path("misc")
 
 # Path to the optional ztp.ini config file
-ISO_PATH_ZTP = "{}/ztp.ini".format(ISO_PATH_MISC)
+ISO_PATH_ZTP = str(ISO_PATH_MISC / "ztp.ini")
 
 # Path to the initial configuration file
-ISO_PATH_INIT_CFG = "{}/config".format(ISO_PATH_MISC)
+ISO_PATH_INIT_CFG = str(ISO_PATH_MISC / "config")
 
 # Path to the label
-ISO_PATH_LABEL = "{}/label".format(ISO_PATH_MISC)
+ISO_PATH_LABEL = str(ISO_PATH_MISC / "label")
 
 # Path to mdata.json (including old 7.5.1 location)
 ISO_PATH_MDATA_751 = "private/mdata/mdata.json"
-ISO_PATH_MDATA = "{}/mdata.json".format(ISO_PATH_MISC)
+ISO_PATH_MDATA = str(ISO_PATH_MISC / lnt_gisoglobals.LNT_MDATA_PATH)
+
+# Path to build-info.txt
+ISO_PATH_BUILDINFO = str(ISO_PATH_MISC / lnt_gisoglobals.LNT_BUILDINFO_PATH)
 
 # ------------------------------------------------------------------------------
 # Significant 'provides' tags / package names
@@ -133,3 +160,10 @@ XR_FOUNDATION = "xr-foundation"
 # Card types
 LC_CARD_TYPES = {"lc-distributed"}
 RP_CARD_TYPES = {"rp-distributed", "rplc-centralized", "rplc-sff"}
+
+CARD_CLASS_READABLE = {
+    "lc-distributed": "Line Card (modular)",
+    "rp-distributed": "Route Processor (modular)",
+    "rplc-centralized": "Centralized form factor",
+    "rplc-sff": "Fixed form factor",
+}

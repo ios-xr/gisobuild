@@ -39,7 +39,6 @@ from typing import Callable, List, Sequence
 
 from . import _subprocs
 
-
 _logger = logging.getLogger(__name__)
 
 
@@ -153,7 +152,7 @@ def _run_rpm(
     """
     cmd = _get_rpm_cmd(args)
     try:
-        out = _subprocs.execute_combined_stdout(cmd, verbose_logging=True)
+        out = _subprocs.execute_combined_stdout(cmd, verbose_logging=False)
     except subprocess.CalledProcessError as e:
         raise exc_creator(e) from e
     return out
@@ -224,7 +223,6 @@ def check_signature(db_dir: pathlib.Path, pkg_path: pathlib.Path) -> str:
         The output from the rpm command.
 
     """
-    _logger.debug("Checking signatures of package %s", str(pkg_path))
     return _run_rpm(
         ["--dbpath", str(db_dir), "-Kv", str(pkg_path)],
         functools.partial(CheckSignatureError, pkg_path),
@@ -266,6 +264,10 @@ def check_install(db_dir: pathlib.Path, pkgs: Sequence[pathlib.Path]) -> str:
             # best to isolate the checks from the host environment as much as
             # possible.
             "--ignoreos",
+            # Ignore size available on this device - we aren't actually
+            # installing to this device/partition, so insufficient disk space
+            # should not cause this to crash.
+            "--ignoresize",
             "--justdb",
             "--dbpath",
             "/",

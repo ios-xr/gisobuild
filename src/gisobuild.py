@@ -18,26 +18,26 @@ or implied.
 """
 
 import sys
+
 try:
     assert sys.version_info >= (3, 6)
 except AssertionError:
     print("This tool requires python version 3.6 or higher")
     sys.exit(-1)
 import argparse
-import os
 import logging
-from typing import Tuple
-from utils.gisoglobals import *
-from utils import gisoutils
-import re
-from typing import Dict, Any
+import os
 import pathlib
+import re
+from typing import Any, Dict, Set, Tuple
+
+from utils import gisoutils
+from utils.gisoglobals import *
 
 try:
-    sys.path.append (
-        str(pathlib.Path(os.path.abspath(__file__)).parents[2])
-    )
+    sys.path.append(str(pathlib.Path(__file__).resolve().parents[2]))
     import exr
+
     OPTIMIZE_CAPABLE = True
 except ImportError:
     OPTIMIZE_CAPABLE = False
@@ -49,13 +49,41 @@ DFLT_OUTPUT_DIR = os.path.join(cwd, "output_{}".format(MODULE_NAME))
 logger = logging.getLogger(MODULE_NAME)
 
 
+class InvalidArgsError(Exception):
+    """General error for invalid CLI args."""
+
+
+class InvalidPkgListPkgError(Exception):
+    """Error if the package list contains invalid packages."""
+
+    def __init__(
+        self, pkgs: Set[str],
+    ):
+        """
+        Initialize the class.
+
+        :param pkgs:
+            The packages that are invalid.
+
+        """
+        assert pkgs
+        lines = []
+        lines.append("The following packages are invalid:")
+        for pkg in sorted(pkgs):
+            lines.append(f"  {pkg}")
+        super().__init__("\n".join(lines))
+
+
 def parsecli() -> Tuple[argparse.Namespace, argparse.ArgumentParser]:
     parser = argparse.ArgumentParser(
         description="Utility to build Golden ISO for IOS-XR.",
     )
 
     parser.add_argument(
-        "--iso", dest="iso", type=str, help="Path to Mini.iso/Full.iso file"
+        "--iso",
+        dest="iso",
+        type=str,
+        help="Path to an input LNT ISO, EXR mini/full ISO, or a GISO.",
     )
 
     parser.add_argument(
@@ -100,7 +128,7 @@ def parsecli() -> Tuple[argparse.Namespace, argparse.ArgumentParser]:
     parser.add_argument(
         "--no-label",
         action="store_true",
-        help="Indicates that no label at all should be added to the GISO"
+        help="Indicates that no label at all should be added to the GISO",
     )
 
     parser.add_argument(
@@ -156,6 +184,16 @@ def parsecli() -> Tuple[argparse.Namespace, argparse.ArgumentParser]:
             "Package names can be specified to include optional packages in "
             "the output GISO."
         ),
+    )
+
+    parser.add_argument(
+        "--key-requests",
+        dest="key_requests",
+        required=False,
+        nargs="+",
+        default=[],
+        help="Key requests to package to be used when validating "
+        "customer and partner RPMs.",
     )
 
     """ EXR GISO build options."""
@@ -221,7 +259,6 @@ def parsecli() -> Tuple[argparse.Namespace, argparse.ArgumentParser]:
             help="To build full iso only for xrv9k",
         )
 
-
     """ LNT GISO build options."""
     lntgroup = parser.add_argument_group("LNT only build options")
 
@@ -264,6 +301,8 @@ def parsecli() -> Tuple[argparse.Namespace, argparse.ArgumentParser]:
         action="store_true",
         help="Verbose output for the dependency check.",
     )
+    # Hidden argument to allow GISO build metadata to be given as a json file
+    # instead of being generated during the GISO build.
     lntgroup.add_argument(
         "--buildinfo", dest="buildinfo", type=str, help=argparse.SUPPRESS,
     )
@@ -278,14 +317,49 @@ def parsecli() -> Tuple[argparse.Namespace, argparse.ArgumentParser]:
         "--isoinfo",
         dest="isoinfo",
         help="User specified isoinfo executable to use instead of the "
-             "default version",
+        "default version",
     )
     lntgroup.add_argument(
         "--image-script",
         dest="image_script",
         help="User specified image.py script to be used for packing/unpacking "
-             "instead of the version extracted from the ISO. It will not be "
-             "inserted into the GISO. Intended for debugging purposes only."
+        "instead of the version extracted from the ISO. It will not be "
+        "inserted into the GISO. Intended for debugging purposes only.",
+    )
+    lntgroup.add_argument(
+        "--only-support-pids",
+        dest="only_support_pids",
+        nargs="+",
+        default=None,
+        help=(
+            "Support only these hardware PIDs in the output ISO (e.g. "
+            "'8800-RP' '8800-LC-36FH' '8800-LC-48H'); other PIDs from the "
+            "input ISO will be removed. This option is generally used to "
+            "reduce the size of the output ISO. Do not use this option before "
+            "discussing with Cisco support."
+        ),
+    )
+    lntgroup.add_argument(
+        "--remove-all-key-requests",
+        action="store_true",
+        help="Remove all key requests from the input ISO",
+    )
+    lntgroup.add_argument(
+        "--remove-key-requests",
+        nargs="+",
+        default=[],
+        help=(
+            "Remove key requests, specified in a space separated list. These "
+            "are matched against the filename, e.g. key_request.kpkg"
+        ),
+    )
+    lntgroup.add_argument(
+        "--no-buildinfo",
+        action="store_true",
+        help=(
+            "Do not update the build metadata in mdata.json with "
+            "the GISO build information"
+        )
     )
 
     version_string = "%%(prog)s (version %s)" % (__version__)
@@ -301,8 +375,9 @@ def parsecli() -> Tuple[argparse.Namespace, argparse.ArgumentParser]:
     return pargs, parser
 
 
-""" Validate input arguments. Also return if exr or lnt iso is provided. """
 def validate_and_setup_args(args: argparse.Namespace) -> argparse.Namespace:
+    """Validate input arguments. Also return if exr or lnt iso is provided."""
+
     if not args.iso:
         raise AssertionError("Please provide an input ISO")
 
@@ -311,13 +386,13 @@ def validate_and_setup_args(args: argparse.Namespace) -> argparse.Namespace:
         raise AssertionError("Bundle ISO {} does not exist.".format(args.iso))
     filetype = gisoutils.get_file_type(args.iso)
     args.iso = os.path.abspath(args.iso)
-    if filetype != FILE_TYPE_ISO:
+    if filetype not in {FILE_TYPE_ISO, FILE_TYPE_UDF}:
         raise AssertionError(
-            "Bundle ISO {} is not an ISO file.".format(args.iso)
+            "Bundle ISO {} is not an ISO or UDF file.".format(args.iso)
         )
 
     """ Check if iso provided has exr platform name """
-    args.exriso = gisoutils.is_platform_exr (args.iso)
+    args.exriso = gisoutils.is_platform_exr(args.iso)
 
     """ Check if input iso is a GISO, we are trying to extend. """
     if re.match(".*golden.*", str(args.iso)):
@@ -326,7 +401,7 @@ def validate_and_setup_args(args: argparse.Namespace) -> argparse.Namespace:
         args.gisoExtend = False
 
     """ Check if optimized or a full iso build is being triggered. """
-    if hasattr(args, 'optimize') or hasattr(args, 'fullISO'):
+    if hasattr(args, "optimize") or hasattr(args, "fullISO"):
         if args.optimize or args.fullISO:
             display_string = "Optimized" if args.optimize else "Full ISO"
             if not OPTIMIZE_CAPABLE:
@@ -343,6 +418,21 @@ def validate_and_setup_args(args: argparse.Namespace) -> argparse.Namespace:
                 )
 
     args.repo = [os.path.abspath(repopath) for repopath in args.repo]
+
+    # If --pkglist is specified, --repo must be provided
+    if args.pkglist and not args.repo:
+        raise InvalidArgsError(
+            "If --pkglist is specified, --repo must also be provided"
+        )
+
+    # Packages in the pkglist don't need an extension, but if they have one, it
+    # must be ".rpm"
+    bad_pkglist_pkgs = set()
+    for pkg in args.pkglist:
+        if "." in pkg and not pkg.endswith(".rpm"):
+            bad_pkglist_pkgs.add(pkg)
+    if bad_pkglist_pkgs:
+        raise InvalidPkgListPkgError(bad_pkglist_pkgs)
 
     """ Check xr config file if provided. """
     if args.xrconfig:
@@ -388,9 +478,7 @@ def validate_and_setup_args(args: argparse.Namespace) -> argparse.Namespace:
 
     """ Check input label if provided. """
     if args.no_label:
-        logger.info(
-            "Info: User has requested a Golden ISO with no label"
-        )
+        logger.info("Info: User has requested a Golden ISO with no label")
         args.label = None
     elif not args.label:
         logger.info(
@@ -418,15 +506,27 @@ def validate_and_setup_args(args: argparse.Namespace) -> argparse.Namespace:
         rpm_suffix = [r for r in args.remove_packages if r.endswith(".rpm")]
         if rpm_suffix:
             raise AssertionError(
-            "Error: --remove-packages expects package names, not RPM file "
-            "names. The following end with a .rpm suffix suggesting that they "
-            "are RPM file names: {}".format(" ".join(rpm_suffix))
-        )
+                "Error: --remove-packages expects package names, not RPM file "
+                "names. The following end with a .rpm suffix suggesting that they "
+                "are RPM file names: {}".format(" ".join(rpm_suffix))
+            )
+
+    """ Check key packages if provided. """
+    if args.key_requests:
+        missing_key_requests = [
+            k for k in args.key_requests if not os.path.exists(k)
+        ]
+        if missing_key_requests:
+            raise AssertionError(
+                "Error: The following key requests do not exist: {}".format(
+                    ", ".join(missing_key_requests)
+                )
+            )
     return args
 
 
 def main() -> None:
-    """ Parse CLI options """
+    """Parse CLI options"""
     cli_args, parser = parsecli()
     transform_dict: Dict[str, Any] = {}
 
@@ -450,9 +550,7 @@ def main() -> None:
     """ Set up the build env """
     try:
         gisoutils.create_working_dir(
-            cli_args.clean,
-            cli_args.out_directory,
-            MODULE_NAME,
+            cli_args.clean, cli_args.out_directory, MODULE_NAME,
         )
     except OSError as error:
         print(
@@ -509,7 +607,7 @@ def main() -> None:
 
         transform_dict = EXR_CLI_DICT_MAP
     else:
-        from lnt.launcher import execute_build # type: ignore
+        from lnt.launcher import execute_build  # type: ignore
 
         transform_dict = LNT_CLI_DICT_MAP
 

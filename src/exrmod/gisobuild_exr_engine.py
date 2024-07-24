@@ -97,6 +97,20 @@ SIGNED_651_NCS5500_RPM_PATH = 'giso/boot/initrd.img/iso/system_image.iso/<rpms>'
 global_platform_name="None"
 BZIMAGE_712="bzImage-7.1.2"
 
+def insideCUBES():
+    contEnvPath = pathlib.Path("/run/.containerenv")
+    if contEnvPath.exists() and contEnvPath.read_text().find("cubes") is not -1:
+        return True
+    return False
+
+def modifyCubesCmd(cmd: str)->str:
+    """
+        Modify cmd to make it runnable inside cubes.
+    """
+    if insideCUBES():
+        cmd = "sudo "+cmd
+    return cmd
+
 def run_cmd(cmd):
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, 
                                stderr=subprocess.PIPE, shell=True, executable='/bin/bash')
@@ -111,7 +125,7 @@ def run_cmd(cmd):
            error = error.decode('utf8')
         except:
            pass
-        out = error
+        out += error
         raise RuntimeError("Error CMD=%s returned --->%s" % (cmd, out))
     return dict(rc=sprc, output=out)
 
@@ -340,13 +354,17 @@ class Rpm:
         # Some RPMs(k9) dont have read access which causes RPM query fail 
         run_cmd(" chmod 644 %s"%(os.path.join(fs_root,rpm)))
         if not is_full_iso:
-            group_info = run_cmd("chroot "+fs_root+" rpm -qp --qf '%{GROUP}' "+rpm)
+            gen_cmd = "chroot "+fs_root+" rpm -qp --qf '%{GROUP}' "+rpm
+            gen_cmd = modifyCubesCmd(gen_cmd)
+            group_info = run_cmd(gen_cmd)
             if 'SUPPCARDS' in group_info["output"].upper() or 'XRRELEASE' in group_info["output"].upper():
-                result = run_cmd("chroot "+fs_root+" rpm -qp --qf '%{NAME};%{VERSION};"
+                gen_cmd = ("chroot "+fs_root+" rpm -qp --qf '%{NAME};%{VERSION};"
                              "%{RELEASE};%{ARCH};"
                              "%{BUILDTIME};"
                              "%{PREFIXES};%{GROUP};"
                              "' "+rpm)
+                gen_cmd = modifyCubesCmd(gen_cmd)
+                result = run_cmd(gen_cmd)
                 result_str_list = result["output"].split(";")
                 self.name = result_str_list[0]
                 self.version = result_str_list[1]
@@ -376,11 +394,13 @@ class Rpm:
                 self.card_type = pkgdict['CARDTYPE']
                 rpm_data_filled = True
             else:
-                result = run_cmd("chroot "+fs_root+" rpm -qp --qf '%{NAME};%{VERSION};"
+                gen_cmd = ("chroot "+fs_root+" rpm -qp --qf '%{NAME};%{VERSION};"
                              "%{RELEASE};%{ARCH};%{PACKAGETYPE};%{PACKAGEPRESENCE};"
                              "%{PIPD};%{CISCOHW};%{CARDTYPE};%{BUILDTIME};"
                              "%{GROUP};%{VMTYPE};%{SUPPCARDS};%{PREFIXES};"
                              "%{XRRELEASE};' "+rpm)
+                gen_cmd = modifyCubesCmd(gen_cmd)
+                result = run_cmd(gen_cmd)
         else:
             if OPTIMIZE_CAPABLE:
                 cmd_opts = ["-qp", "--qf",
@@ -414,7 +434,9 @@ class Rpm:
             self.xrrelease = result_str_list[14]
 
         if not is_full_iso:
-            result = run_cmd("chroot %s rpm -qp --provides %s" % (fs_root, rpm))
+            gen_cmd = "chroot %s rpm -qp --provides %s" % (fs_root, rpm)
+            gen_cmd = modifyCubesCmd(gen_cmd)
+            result = run_cmd(gen_cmd)
         else:
             cmd_opts = ["-qp", "--provides", f"{fs_root}/{rpm}"]
             cmd = exr_int.get_rpm_internal_cmd (cmd_opts)
@@ -426,7 +448,9 @@ class Rpm:
         self.provides = result["output"]
 
         if not is_full_iso:
-            result = run_cmd("chroot %s rpm -qp --requires %s" % (fs_root, rpm))
+            gen_cmd = "chroot %s rpm -qp --requires %s" % (fs_root, rpm)
+            gen_cmd = modifyCubesCmd(gen_cmd)
+            result = run_cmd(gen_cmd)
         else:
             cmd_opts = ["-qp", "--requires", f"{fs_root}/{rpm}"]
             cmd = exr_int.get_rpm_internal_cmd (cmd_opts)
@@ -2096,18 +2120,33 @@ class Iso(object):
             for pkg in input_rpms_unique:
                 if global_platform_name not in pkg and not re.search('CSC[a-z][a-z]\d{5}', pkg):
                     continue
-                ret=run_cmd("chroot %s rpm -qip rpms/%s | grep %s"%
-                            (self.iso_extract_path, pkg, "Signature"))
-                key=ret["output"].split(" ")[-1].strip('\n')
+                key: str = None
+                key_cmd: str = ("chroot %s rpm -qip rpms/%s"%(self.iso_extract_path, pkg))
+                key_cmd: str = modifyCubesCmd(key_cmd)
+                cp: subprocess.CompletedProcess = subprocess.run(key_cmd,
+                            stderr=subprocess.PIPE, stdout=subprocess.PIPE,
+                            shell=True, check=True)
+                logger.debug("\nCMD:%s\nSTDOUT:%s\nSTDERR:%s"%(
+                    key_cmd, cp.stdout.decode(), cp.stderr.decode()
+                ))
+                ret: str = cp.stdout.decode()
+                # Signature   : RSA/8, Thu Jul 18 07:02:07 2024, Key ID 17f6e0b8e554753f
+                key_match: (re.Match[str] | None) = re.search(r"Signature\s*:.+Key ID\s+([0-9a-zA-Z]{16})", ret)
+                if key_match:
+                    key = key_match.groups()[0]
+                    logger.debug("RPM: %s -> Key: %s"%(pkg, key))
+                else:
+                    logger.info("Unable to get Rpm Signature Key for: %s"%(pkg))
+                    raise RuntimeError("Unable to get Rpm Signature Key for: %s"%(pkg))
                 if iso_key != "(none)": 
                    if key[8:] != iso_key:
-                      logger.debug("%s key:%s doesn't match with iso image"%
-                                        (os.path.basename(pkg), key[8:]))
+                      logger.debug("%s key:%s doesn't match with that of iso image: %s"%
+                                        (os.path.basename(pkg), key[8:], iso_key))
                       PkgSigCheckList.append(os.path.basename(pkg))
                 else: 
                    if key != iso_key:
-                      logger.debug("%s key:%s doesn't match with iso image"%
-                                        (os.path.basename(pkg), key))
+                      logger.debug("%s key:%s doesn't match with that of iso image: %s"%
+                                        (os.path.basename(pkg), key, iso_key))
                       PkgSigCheckList.append(os.path.basename(pkg))
             if PkgSigCheckList:
                logger.info("\nFollowing RPMs signature doesn't match with iso image\n")
@@ -2120,12 +2159,14 @@ class Iso(object):
             logger.info("\n\t...RPM signature check [PASS]")
         except:
            logger.info("\n\t...Failed to complete RPM signature checks")
-
+           return False, list(dup_input_rpms_set)
         # run compatibility check
         try:
-            compat_cmd = "chroot %s %s %s" % (
+            gen_cmd = "chroot %s %s %s" % (
                 self.iso_extract_path, Iso.RPM_OPTIONS, rpm_file_list
             )
+            gen_cmd = modifyCubesCmd(gen_cmd)
+            compat_cmd = gen_cmd
             run_cmd(compat_cmd)
         except Exception as e:
             errstr = str(e).split("--->")
@@ -2149,7 +2190,7 @@ class Iso(object):
                 elif 'signature: NOKEY' in line :
                     logger.debug("Ignoring RPM signing ")
                     continue
-                # Ignore epoch (if present) from provide info for compatibility check
+                # Hack to ignore epoch if its present
                 elif re.match(r"(?P<dep>.*)\s+is needed by.*", line):
                     m = re.match(r"(?P<dep>.*)\s+is needed by.*", line)
                     fn = m.group("dep")
@@ -2399,13 +2440,17 @@ class Giso:
            verification.
         '''
         if os.path.isfile(fs_root+"/boot/certs/public-key.gpg"):
-           ret = run_cmd("chroot %s rpm --import %s"%(fs_root, "boot/certs/public-key.gpg"))
-           ret = run_cmd("chroot %s rpm -qa | grep %s"%(fs_root, "gpg-pubkey"))
-           key = ret["output"].split("-")[-2]
-           self.ISO_RPM_KEY = key
-           logger.debug("The ISO Key is %s\n"%(key))
+            gen_cmd = "chroot %s rpm --import %s"%(fs_root, "boot/certs/public-key.gpg")
+            gen_cmd = modifyCubesCmd(gen_cmd)
+            ret = run_cmd(gen_cmd)
+            gen_cmd = "chroot %s rpm -qa | grep %s"%(fs_root, "gpg-pubkey")
+            gen_cmd = modifyCubesCmd(gen_cmd)
+            ret = run_cmd(gen_cmd)
+            key = ret["output"].split("-")[-2]
+            self.ISO_RPM_KEY = key
+            logger.debug("The ISO Key is %s\n"%(key))
         else:
-           logger.debug("Failed to find public-key.gpg file")
+            logger.debug("Failed to find public-key.gpg file")
 
     def set_vm_rpm_file_paths(self, rpm_file_paths, vm_type):
         self.vm_rpm_file_paths[vm_type] = rpm_file_paths
@@ -2919,8 +2964,10 @@ class Giso:
         duplicate_xr_rpms = []
         duplicate_calv_rpms = []
         duplicate_host_rpms = []
-        if os.path.exists("/app/signing_env"):
-            f_giso_rpms =  '/app/signing_env/rpms_packaged_in_giso.txt'
+        signing_env = pathlib.Path(self.giso_dir).parents[1] / ".signing_env"
+        #logger.info("build_giso:Signing ENV: ", signing_env)
+        if signing_env.exists():
+            f_giso_rpms =  (signing_env / 'rpms_packaged_in_giso.txt').__str__()
         else:
             f_giso_rpms =  'rpms_packaged_in_giso.txt'
         with open(f_giso_rpms,"w") as fdr:
@@ -3168,9 +3215,10 @@ class Giso:
                                 self.vm_iso[vm_type].iso_extract_path:
                             fsroot = self.vm_iso[vm_type].iso_extract_path
                             break
-                    cmd = "{tool} --repo {repo} --out-directory {outdir} \
+                    cmd = "{executable} {tool} --repo {repo} --out-directory {outdir} \
                           --matrixfile {matfile} --platform {plat} --fsroot {fs} \
                           --to-release {isorel} --from-release {rel}".format (
+                                executable = sys.executable,
                                 tool = bridgetool,
                                 repo = ' '.join(args.rpmRepo),
                                 outdir = os.path.join(self.giso_dir,"bridge_smus"),
@@ -3184,8 +3232,10 @@ class Giso:
                     logger.info ("\nPackaging bridge SMUs with input:\n\t {}".format (
                                   '\n\t '.join(args.bridge_fixes)))
                     try:
-                        run_cmd(cmd)
-                    except:
+                        op = run_cmd(cmd)
+                        logger.info(op['output'])
+                    except RuntimeError as Rte:
+                        logger.error(Rte)
                         logger.info ("Warning! Unable to package bridge SMUs. "
                                         "Continuing build...")
                 elif args.bridge_fixes:
@@ -3434,7 +3484,8 @@ class Giso:
         """ Pretend to be in workspace as thats a requirement for signing and
             get platforms .cer and .der files
         """
-        signing_env = pathlib.Path("/app/signing_env")
+        signing_env = pathlib.Path(self.giso_dir).parents[1] / ".signing_env"
+        #logger.info("create_sign_env:Signing ENV: ", signing_env)
         if signing_env.exists():
             logger.info("\nSigning environment exists! Reusing ...")
             os.chdir(signing_env)

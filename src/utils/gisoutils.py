@@ -18,30 +18,24 @@ or implied.
 
 """
 
+import datetime
 import hashlib
 import json
+import logging
+import os
 import shutil
 import sys
-import os
-from pathlib import Path
-from tarfile import TarFile
 import textwrap
-import logging
-from logging import handlers
-import datetime
 import threading
 import time
+from logging import handlers
+from pathlib import Path
+from tarfile import TarFile
+from typing import Any, Dict, Iterable, List, Tuple, Union
 
-from typing import (
-    Any,
-    Union,
-    Dict,
-    List,
-    Tuple,
-    Iterable,
-)
-from . import gisoglobals
-from . import _subprocs
+from lnt import lnt_gisoglobals
+
+from . import _subprocs, gisoglobals
 
 logger = logging.getLogger(__name__)
 e = threading.Event()
@@ -183,7 +177,7 @@ def is_platform_exr(iso: str) -> bool:
         ).splitlines()
         if "/iso_info.txt" in files_top:
             is_exr = True
-        elif "/mdata/mdata.json" in files_top:
+        elif "/" + str(lnt_gisoglobals.LNT_MDATA_PATH) in files_top:
             is_exr = False
         else:
             raise AssertionError("Input ISO file is not a valid image.")

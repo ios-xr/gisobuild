@@ -18,6 +18,8 @@ or implied.
 
 """
 
+from pathlib import Path
+
 LNT_PLATFORM_FAMILY = "platform-family"
 LNT_XR_VERSION = "xr-version"
 LNT_IMAGE_NAME = "image-name"
@@ -31,5 +33,9 @@ LNT_GISO_CDETS = "giso-cdets"
 LNT_ISO_TYPE_KEY = "iso-type"
 LNT_ISO_FMT_VER = "iso-format-version"
 
-LNT_MDATA_DIR = "mdata"
+LNT_MDATA_DIR = Path("mdata")
 LNT_MDATA_FILE = "mdata.json"
+LNT_MDATA_PATH = LNT_MDATA_DIR / LNT_MDATA_FILE
+LNT_BUILDINFO_DIR = Path("mdata")
+LNT_BUILDINFO_FILE = "build-info.txt"
+LNT_BUILDINFO_PATH = LNT_BUILDINFO_DIR / LNT_BUILDINFO_FILE

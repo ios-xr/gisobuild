@@ -34,7 +34,6 @@ import re
 import shutil
 import sys
 import tempfile
-
 from collections import defaultdict
 from functools import cmp_to_key
 from typing import (
@@ -46,21 +45,15 @@ from typing import (
     Set,
     Tuple,
     TypeVar,
+    Union,
 )
 
-
-from utils import gisoutils as ggisoutils
 from utils import gisoglobals as gglobals
-from . import _blocks
-from . import _file
-from . import _isoformat
-from . import _packages
-from . import _pkgchecks
-from . import _pkgpicker
-from .. import gisoutils
-from .. import image
-from .. import lnt_gisoglobals as gisoglobals
+from utils import gisoutils as ggisoutils
 
+from .. import gisoutils, image
+from .. import lnt_gisoglobals as gisoglobals
+from . import _blocks, _file, _isoformat, _packages, _pkgchecks, _pkgpicker
 
 ###############################################################################
 #                               Global variables                              #
@@ -72,6 +65,7 @@ from .. import lnt_gisoglobals as gisoglobals
 _LOGFILE = "gisobuild.log"
 _log = logging.getLogger(__name__)
 
+_MIN_XR_VERSION_FOR_OWNER_PARTNER = _packages.XRVersion("7.11.1")
 
 ###############################################################################
 #                               Custom exceptions                             #
@@ -163,6 +157,8 @@ class InvalidPkgsError(Exception):
         self,
         invalid_xr_version_pkgs: Set[_packages.Package],
         iso_version: str,
+        pre_supported_version_owner_pkgs: Set[_packages.Package],
+        pre_supported_version_partner_pkgs: Set[_packages.Package],
         invalid_arch_pkgs: Set[_packages.Package],
         iso_archs: Set[str],
     ) -> None:
@@ -175,6 +171,14 @@ class InvalidPkgsError(Exception):
         :param iso_version:
             The xr version of the input iso.
 
+        :param pre_supported_version_owner_pkgs:
+            Any owner packages that were given with an ISO with an XR version
+            before _MIN_XR_VERSION_FOR_OWNER_PARTNER.
+
+        :param pre_supported_version_partner_pkgs:
+            Any partner packages that were given with an ISO with an XR version
+            before _MIN_XR_VERSION_FOR_OWNER_PARTNER.
+
         :param invalid_arch_pkgs:
             The packages with invalid architecture.
 
@@ -182,7 +186,14 @@ class InvalidPkgsError(Exception):
             The architectures of the rpms in the input iso.
 
         """
-        assert invalid_xr_version_pkgs or invalid_arch_pkgs
+        assert any(
+            [
+                invalid_xr_version_pkgs,
+                pre_supported_version_owner_pkgs,
+                pre_supported_version_partner_pkgs,
+                invalid_arch_pkgs,
+            ]
+        )
         lines = []
         if invalid_xr_version_pkgs:
             lines.append(
@@ -201,6 +212,75 @@ class InvalidPkgsError(Exception):
             )
             for pkg in sorted(invalid_arch_pkgs, key=str):
                 lines.append(f"  {str(pkg)} has arch {pkg.arch}")
+        if (
+            pre_supported_version_owner_pkgs
+            or pre_supported_version_partner_pkgs
+        ):
+            lines.append(
+                "Partner and owner packages cannot be installed on ISOs with XR versions before "
+                f"{_MIN_XR_VERSION_FOR_OWNER_PARTNER}. An ISO with version {iso_version} was provided."
+            )
+            if pre_supported_version_owner_pkgs:
+                lines.append("  The following owner packages were provided:")
+                for pkg in sorted(pre_supported_version_owner_pkgs, key=str):
+                    lines.append(f"    {str(pkg)}")
+            if pre_supported_version_partner_pkgs:
+                lines.append("  The following partner packages were provided:")
+                for pkg in sorted(pre_supported_version_partner_pkgs, key=str):
+                    lines.append(f"    {str(pkg)}")
+        super().__init__("\n".join(lines))
+
+
+class InvalidBugfixesError(Exception):
+    """Error if there are invalid bugfixes."""
+
+    def __init__(
+        self,
+        partner_packages: Set[_packages.Package],
+        owner_packages: Set[_packages.Package],
+        invalid_arch_pkgs: Set[_packages.Package],
+        iso_arch: str,
+    ) -> None:
+        """
+        Initialize the class.
+
+        :param partner_packages:
+            The list of partner packages provided as bridging bugfixes.
+
+        :param owner_packages:
+            The list of owner packages provided as bridging bugfixes.
+
+        :param invalid_arch_pkgs:
+            The packages with invalid architecture.
+
+        :param iso_arch:
+            The architectures of the rpms in the input iso.
+
+        """
+        assert any([partner_packages, owner_packages, invalid_arch_pkgs])
+        lines = []
+        if partner_packages:
+            lines.append(
+                "Bridging bugfixes must be Cisco packages, but the following "
+                "partner packages were provided:"
+            )
+            for pkg in sorted(partner_packages, key=str):
+                lines.append(f"  {str(pkg)}")
+        if owner_packages:
+            lines.append(
+                "Bridging bugfixes must be Cisco packages, but the following "
+                "owner packages were provided:"
+            )
+            for pkg in sorted(owner_packages, key=str):
+                lines.append(f"  {str(pkg)}")
+        if invalid_arch_pkgs:
+            lines.append(
+                "The following bugfix packages have a different architecture "
+                f"to the input ISO (expected {iso_arch}):"
+            )
+            for pkg in sorted(invalid_arch_pkgs, key=str):
+                lines.append(f"  {str(pkg)} has arch {pkg.arch}")
+
         super().__init__("\n".join(lines))
 
 
@@ -239,6 +319,66 @@ class ReqPackageBeingRemovedError(Exception):
             "The following packages were requested to be removed, but they "
             "are required: {}".format(" ".join(pkgs))
         )
+
+
+def _format_pid_types(pid_types: Dict[str, str]) -> str:
+    if not pid_types:
+        return "(No PIDs supported by this ISO)"
+
+    # Map to readable names
+    pid_types = {
+        pid: _isoformat.CARD_CLASS_READABLE[card_type]
+        if card_type in _isoformat.CARD_CLASS_READABLE
+        else card_type
+        for pid, card_type in pid_types.items()
+    }
+    sorted_pids = sorted(pid_types.keys())
+    max_pid_len = max(len(pid) for pid in pid_types.keys())
+    max_class_len = max(len(card_class) for card_class in pid_types.values())
+
+    return (
+        "The PIDs supported by the input ISO are:\n"
+        + f"{'PID'.ljust(max_pid_len)} | {'Card class'.ljust(max_class_len)}\n"
+        + f"{'-'*max_pid_len}-|-{'-' * max_class_len}\n"
+        + "\n".join(
+            f"{pid.ljust(max_pid_len)} | {pid_types[pid].ljust(max_class_len)}"
+            for pid in sorted_pids
+        )
+    )
+
+
+class UnsupportedPIDError(Exception):
+    """The user has specified PIDs to keep that do not exist in the input ISO."""
+
+    def __init__(
+        self, unexpected_pids: Set[str], pid_types: Dict[str, str]
+    ) -> None:
+        """Initialise an UnsupportedPIDError"""
+        top_msg = (
+            "The following PIDs were requested to be supported by the GISO, but they "
+            "are not supported in the input ISO: {}".format(
+                ", ".join(unexpected_pids)
+            )
+        )
+        super().__init__(f"{top_msg}.\n{_format_pid_types(pid_types)}")
+
+
+class BadPIDClassesError(Exception):
+    """The user has specified a distributed RP PID without an LC PID, or vice
+    versa."""
+
+    def __init__(
+        self, rp_in_selection: bool, pid_types: Dict[str, str]
+    ) -> None:
+        """Initialise an BadPIDClassesError"""
+
+        top_msg = (
+            f"One or more {'Route Processor' if rp_in_selection else 'Line Card'} PIDs have been selected without a "
+            + ("Line Card" if rp_in_selection else "Route Processor")
+            + " PID - images for modular hardware must contain at least one of each."
+        )
+
+        super().__init__(f"{top_msg}\n{_format_pid_types(pid_types)}")
 
 
 ###############################################################################
@@ -324,12 +464,7 @@ def _get_rpms(rpm_type: str, packages: List[str], tmp_dir: str) -> List[str]:
         if not os.path.exists(rpm):
             raise RPMDoesNotExistError(rpm)
 
-        if (
-            rpm.endswith(".tgz")
-            or rpm.endswith(".tar.gz")
-            or rpm.endswith(".tar")
-            or rpm.endswith(".rpm")
-        ):
+        if rpm.endswith((".tgz", ".tar.gz", ".tar", ".rpm")):
             rpms_found += _file.get_zipped_and_unzipped_rpms(rpm, tmp_dir)
         elif os.path.isdir(rpm):
             rpms_found += _file.get_rpms_from_dir(rpm, tmp_dir)
@@ -347,9 +482,10 @@ def _get_rpms(rpm_type: str, packages: List[str], tmp_dir: str) -> List[str]:
 
 def _get_updated_mdata(
     args: argparse.Namespace,
-    iso_content: Dict[str, Dict[str, Any]],
+    iso_content: Dict[str, Union[Dict[str, Any], str]],
     install_packages: List["_packages.Package"],
-) -> Dict[str, Any]:
+    no_buildinfo: bool,
+) -> Tuple[Dict[str, Any], str]:
     """
     :param args:
         Parsed arguments
@@ -360,30 +496,64 @@ def _get_updated_mdata(
     :param install_packages:
         Packages in the final install set
 
-    :returns:
-        Metadata with updated build & bugfix information
-    """
-    new_mdata = copy.deepcopy(iso_content["mdata"])
-    build_info = {}
+    :param no_buildinfo:
+        Whether to skip updating the mdata.json contents with the GISO build
+        information.
 
-    generate_buildinfo = False
+    :returns:
+        ISO mdata.json and build-info.txt contents with updated build & bugfix
+        information.
+    """
+    # Keep mypy happy by affirming the types.
+    mdata = iso_content["mdata"]
+    assert isinstance(mdata, dict)
+    buildinfo = str(iso_content["buildinfo"])
+
+    new_mdata: Dict[str, Any] = copy.deepcopy(mdata)
+
+    # The "--buildinfo" argument is intended for use with container builds and
+    # allows the GISO build metadata to be generated outside the container.
+    giso_info = {}
+    generate_giso_info = True
     if args.buildinfo is not None:
         try:
             with open(args.buildinfo) as f:
-                build_info = json.loads(f.read())
+                giso_info = json.loads(f.read())
+            generate_giso_info = False
         except (OSError, json.JSONDecodeError) as exc:
             _log.debug(
                 "Failed to load build info %s: %s", args.buildinfo, str(exc)
             )
-            generate_buildinfo = True
-    else:
-        generate_buildinfo = True
 
-    if generate_buildinfo:
+    # If the GISO build metadata has not been provided via the "--buildinfo"
+    # argument, generate it now.
+    if generate_giso_info:
         _log.debug("Regenerating GISO build info")
-        build_info = gisoutils.generate_buildinfo_mdata()
-    new_mdata.update(build_info)
+        giso_info = gisoutils.generate_buildinfo_mdata()
 
+    if not no_buildinfo:
+        # Only update specific fields with the GISO build metadata, as the build
+        # host and directory should be unchanged in the mdata.json file to avoid
+        # confusing changes in the "show version" output after GISO builds.
+        new_mdata.update(
+            {
+                x: giso_info[x]
+                for x in (
+                    gisoglobals.LNT_GISO_BUILDER,
+                    gisoglobals.LNT_GISO_BUILD_TIME,
+                    gisoglobals.LNT_GISO_BUILD_CMD,
+                )
+                if x in giso_info
+            }
+        )
+
+        # Populate the remaining GISO metadata fields in the mdata.json file
+        # with values from the original build found in the build-info.txt file.
+        new_mdata = gisoutils.parse_buildinfo_mdata(buildinfo, new_mdata)
+
+    # Append the GISO build metadata to the build-info.txt file to ensure
+    # the information is available for debugging.
+    new_buildinfo = gisoutils.format_buildinfo_mdata(buildinfo, giso_info)
     # Iterate over packages in main install groups, adding any provided fixes
     bugfixes = defaultdict(list)
     for package in install_packages:
@@ -394,7 +564,7 @@ def _get_updated_mdata(
         bugfixes[k] = sorted(v)
     new_mdata[gisoglobals.LNT_GISO_CDETS] = bugfixes
 
-    return new_mdata
+    return new_mdata, new_buildinfo
 
 
 def _log_on_success(
@@ -562,16 +732,21 @@ def _calculate_rpms_to_remove(
 
 def _coordinate_bridging(
     bugfixes: List[str],
+    only_support_pids: Optional[List[str]],
     mdata: Dict[str, Any],
     iso_dir: str,
     tmp_dir: str,
     iso_version: str,
+    iso_arch: str,
 ) -> None:
     """
     Co-ordinate addition of bridging RPMs
 
     :param bugfixes:
         List of bridging bugfixes to add
+
+    :param only_support_pids:
+        If given, only support this list of PIDs in the GISO.
 
     :param mdata:
         ISO metadata, as returned from query-content
@@ -584,6 +759,9 @@ def _coordinate_bridging(
 
     :param iso_version:
         XR version of the input ISO.
+
+    :param iso_arch:
+        Architecture of the input ISO.
 
     """
     # Retrieve set of bridging RPMs already within the input GISO
@@ -610,9 +788,13 @@ def _coordinate_bridging(
     if version_errors:
         raise BridgingIsoVersionError(version_errors, iso_version)
 
+    _check_invalid_bugfixes(packages_to_add, iso_arch)
+
     bridging_blocks = _blocks.group_packages(base_packages + packages_to_add)
 
-    blocks_to_include: Dict[str, List[_blocks.AnyBlock]] = defaultdict(list)
+    blocks_to_include: Dict[
+        _packages.XRVersion, List[_blocks.AnyBlock]
+    ] = defaultdict(list)
     blocks_to_exclude: List[_blocks.AnyBlock] = []
 
     # For each block, iterate over all versions of it.
@@ -634,11 +816,18 @@ def _coordinate_bridging(
                     key=cmp_to_key(_pkgpicker.compare_versions),
                     reverse=True,
                 )
+                assert (
+                    xr_version is not None
+                )  # All bridging fixes must have an XR version
                 blocks_to_include[xr_version].append(
                     block_versions[sorted_versions[0]]
                 )
                 for version in sorted_versions[1:]:
                     blocks_to_exclude.append(block_versions[version])
+
+    if only_support_pids is not None:
+        _log.debug("Filtering unsupported PIDs from bridging pkgs")
+        bridging_blocks.filter_pkgs_to_supported_pids(only_support_pids)
 
     _remove_duplicates(bridging_blocks.blocks)
     _remove_duplicates(bridging_blocks.tie_blocks)
@@ -687,22 +876,108 @@ def _check_invalid_pkgs(
 
     """
     different_xr_version_pkgs = set()
+    pre_supported_version_owner_pkgs = set()
+    pre_supported_version_partner_pkgs = set()
     different_arch_pkgs = set()
     for pkg in pkgs:
         # Only check XR version of this is an XR package (rather than third
         # party).
         if _blocks.is_xr_pkg(pkg) and pkg.version.xr_version != iso_version:
             different_xr_version_pkgs.add(pkg)
+        if (
+            pkg.is_owner_package
+            and _MIN_XR_VERSION_FOR_OWNER_PARTNER > iso_version
+        ):
+            pre_supported_version_owner_pkgs.add(pkg)
+        if (
+            pkg.is_partner_package
+            and _MIN_XR_VERSION_FOR_OWNER_PARTNER > iso_version
+        ):
+            pre_supported_version_partner_pkgs.add(pkg)
         if pkg.arch not in iso_archs:
             different_arch_pkgs.add(pkg)
 
-    if different_xr_version_pkgs or different_arch_pkgs:
+    if any(
+        [
+            different_xr_version_pkgs,
+            pre_supported_version_owner_pkgs,
+            pre_supported_version_partner_pkgs,
+            different_arch_pkgs,
+        ]
+    ):
         raise InvalidPkgsError(
             different_xr_version_pkgs,
             iso_version,
+            pre_supported_version_owner_pkgs,
+            pre_supported_version_partner_pkgs,
             different_arch_pkgs,
             iso_archs,
         )
+
+
+def _check_invalid_bugfixes(
+    bugfixes: Iterable[_packages.Package], iso_arch: str
+) -> None:
+    """
+    Check if the given bugfixes are valid.
+
+    :param: bugfixes:
+        The collection of bugfixes to check.
+
+    :param iso_arch:
+        The architecture of the input ISO.
+
+    :raises InvalidBugfixesError:
+        If there are any invalid bugfixes.
+
+    """
+    partner_packages = set()
+    owner_packages = set()
+    different_arch_pkgs = set()
+    for pkg in bugfixes:
+        if pkg.is_partner_package:
+            partner_packages.add(pkg)
+        if pkg.is_owner_package:
+            owner_packages.add(pkg)
+        if pkg.arch != iso_arch:
+            different_arch_pkgs.add(pkg)
+
+    if any([partner_packages, owner_packages, different_arch_pkgs]):
+        raise InvalidBugfixesError(
+            partner_packages, owner_packages, different_arch_pkgs, iso_arch,
+        )
+
+
+def _validate_pid_selection(
+    selected_pids: List[str], giso_blocks: _blocks.GroupedPackages
+) -> None:
+    """Check that all selected PIDs exist in the base ISO, and the selection
+    has a sensible mix of card classes."""
+
+    if not selected_pids:
+        raise ValueError("No PIDs selected - a GISO cannot be made.")
+
+    pid_types = {
+        pid: card_type
+        for pid, _, card_type in _blocks.get_pid_identifier_packages(
+            giso_blocks.get_all_pkgs(
+                _isoformat.PackageGroup.INSTALLABLE_XR_PKGS
+            )
+        )
+    }
+
+    unexpected_pids = set(selected_pids) - set(giso_blocks.supported_pids)
+    if unexpected_pids:
+        raise UnsupportedPIDError(unexpected_pids, pid_types)
+
+    rp_in_selection = any(
+        pid_types[pid] == "rp-distributed" for pid in selected_pids
+    )
+    lc_in_selection = any(
+        pid_types[pid] == "lc-distributed" for pid in selected_pids
+    )
+    if rp_in_selection != lc_in_selection:
+        raise BadPIDClassesError(rp_in_selection, pid_types)
 
 
 def _coordinate_pkgs(
@@ -710,6 +985,7 @@ def _coordinate_pkgs(
     repo: List[str],
     pkglist: List[str],
     remove_packages: List[str],
+    only_support_pids: Optional[List[str]],
     verbose_dep_check: bool,
     skip_dep_check: bool,
     tmp_dir: str,
@@ -727,6 +1003,8 @@ def _coordinate_pkgs(
         additional rpms that can be included.
     :param remove_packages:
         List of blocks to specify rpms to remove.
+    :param only_support_pids:
+        List of PIDs to include in the GISO. Non-specified PIDs will be removed.
     :param verbose_dep_check:
         Flag to indicate whether to use verbose output of the dependency
         checker.
@@ -749,19 +1027,14 @@ def _coordinate_pkgs(
 
     """
     _log.debug("Getting input ISO packages")
-    installable_group_set = set()
-    for attr in _isoformat.INSTALLABLE_PKG_GROUP_ATTRS:
-        installable_group_set.update(
-            gisoutils.get_groups_with_attr(mdata["groups"], attr)
-        )
-    installable_groups = list(installable_group_set)
+    installable_groups = _isoformat.get_installable_groups(mdata["groups"])
 
     iso_dirs = [
         _file.get_group_package_dir(out_dir, group)
         for group in installable_groups
         if os.path.exists(_file.get_group_package_dir(out_dir, group))
     ]
-    iso_pkgs = _get_pkgs_from_groups(out_dir, installable_groups)
+    iso_pkgs = _get_pkgs_from_groups(out_dir, list(installable_groups))
     _log.debug("Packages in the input ISO:")
     for pkg in sorted(iso_pkgs, key=str):
         _log.debug("  %s", str(pkg))
@@ -788,6 +1061,16 @@ def _coordinate_pkgs(
     giso_blocks = _pkgpicker.pick_installable_pkgs(
         iso_blocks, repo_blocks, pkglist, remove_packages
     )
+
+    if only_support_pids is not None:
+        _validate_pid_selection(only_support_pids, giso_blocks)
+        pids_to_support = only_support_pids
+    else:
+        pids_to_support = list(giso_blocks.supported_pids)
+
+    _log.debug("Filtering unsupported PIDs from the input ISO & repo pkgs")
+    giso_blocks.filter_pkgs_to_supported_pids(pids_to_support)
+
     _log.debug("Packages picked to go in the GISO:")
     for group in _isoformat.PackageGroup:
         _log.debug("  Group %s", str(group))
@@ -889,6 +1172,7 @@ def _coordinate_giso(
         args.repo,
         args.pkglist,
         args.remove_packages,
+        args.only_support_pids,
         args.verbose_dep_check,
         args.skip_dep_check,
         tmp_dir,
@@ -896,6 +1180,23 @@ def _coordinate_giso(
         iso_image.is_dev_signed,
         iso_version,
     )
+
+    # If key requests are to be removed, remove them before adding new ones.
+    if args.remove_all_key_requests:
+        _file.remove_all_key_requests(out_dir, iso_content)
+    if args.remove_key_requests:
+        _file.remove_key_requests(
+            out_dir, iso_content, args.remove_key_requests
+        )
+
+    # Add key requests
+    if args.key_requests:
+        for key_request in args.key_requests:
+            _file.add_package(
+                out_dir,
+                pkg=key_request,
+                group=_isoformat.PackageGroup.KEY_PKGS,
+            )
 
     # If clear bridging fixes requested, remove all bridging fixes before
     # adding new ones
@@ -909,10 +1210,12 @@ def _coordinate_giso(
         ) as tmp_bridging_dir:
             _coordinate_bridging(
                 args.bridging_fixes,
+                args.only_support_pids,
                 iso_content,
                 out_dir,
                 tmp_bridging_dir,
                 iso_version,
+                mdata["architecture"],
             )
 
     # Add any of the files that are specified
@@ -934,15 +1237,37 @@ def _coordinate_giso(
             out_dir, file_to_add=args.ztp_ini, file_type=_file.FileType.ZTP,
         )
 
-    # Update ISO metadata
-    new_mdata = _get_updated_mdata(args, iso_content, install_packages)
-    _log.debug("Updating ISO metadata: %s", new_mdata)
-    json_mdata = json.dumps(new_mdata)
-    mdata_file = os.path.join(tmp_dir, "mdata.json")
+    new_mdata, new_buildinfo = _get_updated_mdata(
+        args, iso_content, install_packages, args.no_buildinfo
+    )
+    # Only update the mdata.json if the "--no-buildinfo" argument is not given.
+    _log.debug(
+        "Updating ISO metadata in %s: %s",
+        gisoglobals.LNT_MDATA_FILE,
+        new_mdata,
+    )
+    json_mdata = json.dumps(new_mdata, indent=4)
+    mdata_file = os.path.join(tmp_dir, gisoglobals.LNT_MDATA_FILE)
     with open(mdata_file, "w") as mdata_f:
         mdata_f.write(json_mdata)
     _file.add_package(
         out_dir, file_to_add=mdata_file, file_type=_file.FileType.MDATA,
+    )
+
+    # Update the build-info.txt even if the "--no-buildinfo" argument is given,
+    # so it can be used for debugging (it is not used by install).
+    _log.debug(
+        "Updating ISO build info in %s: %s",
+        gisoglobals.LNT_BUILDINFO_FILE,
+        new_buildinfo,
+    )
+    buildinfo_file = os.path.join(tmp_dir, gisoglobals.LNT_BUILDINFO_FILE)
+    with open(buildinfo_file, "w") as f:
+        f.write(new_buildinfo)
+    _file.add_package(
+        out_dir,
+        file_to_add=buildinfo_file,
+        file_type=_file.FileType.BUILDINFO,
     )
 
     # Now that all desired files and packages have been added/removed repack

@@ -25,8 +25,7 @@ import re
 import shutil
 import subprocess
 import sys
-
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     import yaml
@@ -112,18 +111,27 @@ def _get_required_executables(requirements: Dict[str, Any]) -> List[str]:
     return executable_names
 
 
-def _get_minimum_python_version(
-    requirements: Dict[str, Any]
+def _get_minimum_executable_version(
+    executable_name: str,
+    requirements: Dict[str, Any],
+    display_name: Optional[str] = None,
 ) -> Tuple[int, int]:
     """
-    Parse the requirements to find the minimum required python version.
+    Parse the requirements to find the minimum required version of the given
+    executable.
 
+    :param executable_name:
+        Name of the executable.
     :param requirements:
         Requirements as loaded from the requirements YAML.
+    :param display_name:
+        An alternative name to use for the executable, if given.
 
     :returns:
-        Minimum python version as a tuple of (major-version, minor-version)
+        Minimum executable version as a tuple of (major-version, minor-version)
     """
+    if display_name is None:
+        display_name = executable_name
 
     executables = requirements.get("executable_requirements")
     if not isinstance(executables, list):
@@ -136,72 +144,33 @@ def _get_minimum_python_version(
     ):
         raise RequirementsParsingError("Malformed list of executables")
 
-    python_requirement = [
+    this_exec_requirement = [
         executable
         for executable in executables
-        if executable["name"] == "python3"
+        if executable["name"] == executable_name
     ]
-    if not len(python_requirement) == 1:
+    if not len(this_exec_requirement) == 1:
         raise RequirementsParsingError(
-            "Could not find python version requirements"
+            f"Could not find {display_name} version requirements"
         )
-    if "min_version" not in python_requirement[0]:
-        raise RequirementsParsingError("Could not find minimum python version")
-
-    python_version = re.match(
-        r"(?P<major>\d+)\.(?P<minor>\d+)",
-        python_requirement[0]["min_version"],
-    )
-    if not python_version:
+    if "min_version" not in this_exec_requirement[0]:
         raise RequirementsParsingError(
-            "Could not parse minimum python version"
+            f"Could not find minimum {display_name} version"
+        )
+
+    this_exec_version = re.match(
+        r"(?P<major>\d+)\.(?P<minor>\d+)",
+        this_exec_requirement[0]["min_version"],
+    )
+    if not this_exec_version:
+        raise RequirementsParsingError(
+            f"Could not parse minimum {display_name} version"
         )
 
     return (
-        int(python_version.group("major")),
-        int(python_version.group("minor")),
+        int(this_exec_version.group("major")),
+        int(this_exec_version.group("minor")),
     )
-
-
-def _get_minimum_rpm_version(requirements: Dict[str, Any]) -> Tuple[int, int]:
-    """
-    Parse the requirements to find the minimum required rpm version.
-
-    :param requirements:
-        Requirements as loaded from the requirements YAML.
-
-    :returns:
-        Minimum rpm version as a tuple of (major-version, minor-version)
-    """
-
-    executables = requirements.get("executable_requirements")
-    if not isinstance(executables, list):
-        raise RequirementsParsingError(
-            "Couldn't get list of required executables"
-        )
-    if not all(
-        isinstance(executable, dict) and "name" in executable
-        for executable in executables
-    ):
-        raise RequirementsParsingError("Malformed list of executables")
-
-    rpm_requirement = [
-        executable for executable in executables if executable["name"] == "rpm"
-    ]
-    if not len(rpm_requirement) == 1:
-        raise RequirementsParsingError(
-            "Could not find rpm version requirements"
-        )
-    if "min_version" not in rpm_requirement[0]:
-        raise RequirementsParsingError("Could not find minimum rpm version")
-
-    rpm_version = re.match(
-        r"(?P<major>\d+)\.(?P<minor>\d+)", rpm_requirement[0]["min_version"],
-    )
-    if not rpm_version:
-        raise RequirementsParsingError("Could not parse minimum rpm version")
-
-    return (int(rpm_version.group("major")), int(rpm_version.group("minor")))
 
 
 def check_requirements() -> List[str]:
@@ -220,7 +189,7 @@ def check_requirements() -> List[str]:
     # the contents into a dataclass. Instead we just use the raw dictionary and
     # sanity check any contents we need.
     with open(_requirements_yaml) as f:
-        requirements: dict[str, Any] = yaml.safe_load(f)
+        requirements: Dict[str, Any] = yaml.safe_load(f)
     if not isinstance(requirements, dict):
         raise RequirementsParsingError("Parsed data is not a dictionary")
     if not all(isinstance(key, str) for key in requirements):
@@ -238,8 +207,8 @@ def check_requirements() -> List[str]:
         if shutil.which(exc) is None:
             missing_deps.append(exc)
 
-    min_python_major, min_python_minor = _get_minimum_python_version(
-        requirements
+    min_python_major, min_python_minor = _get_minimum_executable_version(
+        "python3", requirements, "python"
     )
 
     if (
@@ -250,7 +219,9 @@ def check_requirements() -> List[str]:
             "python >= {}.{}".format(min_python_major, min_python_minor)
         )
 
-    min_rpm_major, min_rpm_minor = _get_minimum_rpm_version(requirements)
+    min_rpm_major, min_rpm_minor = _get_minimum_executable_version(
+        "rpm", requirements
+    )
     if "rpm" not in missing_deps:
         missing_rpm = False
         try:

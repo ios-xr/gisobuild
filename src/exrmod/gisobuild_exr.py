@@ -447,7 +447,7 @@ def main (argv, infile):
         rpm_db.cleanup_tmp_repo_path()
         files_to_checksum = set()
         if hasattr(argv, 'optimize') and argv.optimize and argv.in_docker:
-            giso_dir = "/app/signing_env"
+            giso_dir = (pathlib.Path(argv.out_directory).parent / ".signing_env").__str__()
         else:
             giso_dir = cwd
         if not result:
@@ -462,7 +462,7 @@ def main (argv, infile):
             files_to_checksum.add("rpms_packaged_in_giso.txt")
             logger.info("Creating USB Boot zip...")
             try:
-                zip_name = create_usb_zip(os.path.join(cwd, giso.giso_name), giso.platform)
+                zip_name = create_usb_zip(os.path.join(giso_dir, giso.giso_name), giso.platform)
                 files_to_checksum.add(zip_name)
                 logger.info(f"USB Boot Zip: {zip_name}")
             except USBZipFailure as uzf:
@@ -492,5 +492,5 @@ def main (argv, infile):
             files_to_copy = files_to_checksum.copy()
             files_to_copy.add("checksums.json")
             for f in files_to_copy:
-                shutil.move(os.path.join(giso_dir,os.path.basename(f)), argv.out_directory)
+                shutil.move(os.path.join(giso_dir,os.path.basename(f)), pathlib.Path(argv.out_directory).parent.__str__())
         sys.exit(0)

@@ -20,11 +20,7 @@ or implied.
 
 import itertools
 import multiprocessing
-from typing import (
-    Any,
-    Callable,
-    Iterable,
-)
+from typing import Any, Callable, Iterable
 
 __all__ = (
     "map_helper",

@@ -23,6 +23,7 @@ __all__ = ("launch_build",)
 
 import argparse
 import logging
+
 from .. import gisoutils
 
 logger = logging.getLogger("gisobuild")
