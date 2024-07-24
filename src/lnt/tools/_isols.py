@@ -27,15 +27,10 @@ import logging
 import os
 import sys
 import tempfile
+from typing import Any, Dict, List, Optional, Union, cast
 
-from typing import Any, Dict, List, Union, cast, Optional
-
+from .. import gisoutils, image
 from .. import lnt_gisoglobals as isoglobals
-from .. import (
-    gisoutils,
-    image,
-)
-
 
 _LOGFILE = "isols.log"
 _log = logging.getLogger("isols")
@@ -127,41 +122,6 @@ def _print_build_info(iso_mdata: Dict[str, str]) -> None:
         )
 
 
-def _parse_buildinfo(buildinfo: str, mdata: Dict[str, str]) -> Dict[str, str]:
-    """
-    Populate any missing buildinfo fields in ISO metadata with info from
-    image.py's show-buildinfo query. Existing fields are *not* overwritten
-
-    :param buildinfo:
-        Output from show-buildinfo
-
-    :param mdata:
-        The metadata to update with buildinfo
-
-    :returns:
-        The updated metadata
-
-    """
-    # Store of metadata keys vs the corresponding starts of line.
-    mdata_key_line = (
-        (isoglobals.LNT_GISO_BUILDER, "User = "),
-        (isoglobals.LNT_GISO_BUILD_HOST, "Host = "),
-        (isoglobals.LNT_GISO_BUILD_DIR, "Workspace = "),
-        (isoglobals.LNT_GISO_BUILD_TIME, "Built on: "),
-        (isoglobals.LNT_XR_VERSION, "XR version = "),
-    )
-    new_mdata = {}
-    for line in buildinfo.splitlines():
-        for k, line_start in mdata_key_line:
-            if line.startswith(line_start):
-                new_mdata[k] = line[len(line_start) :]
-                break
-
-    new_mdata.update(mdata)
-
-    return new_mdata
-
-
 ###############################################################################
 #                                 Operations                                  #
 ###############################################################################
@@ -193,7 +153,7 @@ def display_build_info(iso: image.Image, *, print_json: bool = False) -> None:
             if _NO_ISO_STRING not in label:
                 json_data["mdata"][isoglobals.LNT_GISO_LABEL] = label
     # Populate any missing fields from buildinfo
-    json_data["mdata"] = _parse_buildinfo(
+    json_data["mdata"] = gisoutils.parse_buildinfo_mdata(
         iso.show_buildinfo(), json_data["mdata"],
     )
     if print_json:
@@ -231,6 +191,28 @@ def display_fixes(iso: image.Image, *, print_json: bool = False) -> None:
         print(fixes, end="")
 
 
+def display_key_requests(
+    iso: image.Image, *, print_json: bool = False
+) -> None:
+    """
+    List the key requests contained in the ISO.
+
+    :param iso:
+        The ISO to query.
+
+    :param print_json:
+        Print the output in JSON format.
+
+    """
+    key_requests = iso.list_key_requests()
+
+    if print_json:
+        _print_json_data(key_requests)
+    else:
+        if key_requests:
+            print("\n".join(key_requests))
+
+
 def list_packages(
     iso: image.Image,
     *,
@@ -248,6 +230,9 @@ def list_packages(
     :param rpms:
         Whether to query the RPMs of the main install group.
 
+    :param group_tags:
+        Specific groups of packages to query.
+
     :param groups:
         Whether to query the packages of all groups.
 
@@ -256,7 +241,7 @@ def list_packages(
 
     """
 
-    def group_has_attr(group_info: dict[str, Any], attr_name: str) -> bool:
+    def group_has_attr(group_info: Dict[str, Any], attr_name: str) -> bool:
         return any(
             cast(str, attr["name"]) == attr_name
             for attr in group_info["attrs"]
@@ -264,7 +249,7 @@ def list_packages(
 
     assert (
         rpms ^ groups
-    ), "Only one of rpm or group can be specified for listing packages"
+    ), "Only one of rpms or groups can be specified for listing packages"
 
     # Determine set of groups to list
     if group_tags is None:
@@ -278,7 +263,7 @@ def list_packages(
             if any(group_has_attr(group, attr) for attr in group_tags)
         ]
     elif groups:
-        groups_to_list = iso.list_groups()
+        groups_to_list = iso.list_rpm_groups()
     else:
         # This function is only invoked if one of the above args is specified
         assert False
@@ -288,7 +273,7 @@ def list_packages(
     }
 
     if rpms:
-        all_packages: list[str] = sum(group_packages.values(), [])
+        all_packages: List[str] = sum(group_packages.values(), [])
         if print_json:
             _print_json_data(sorted(all_packages))
         else:
@@ -313,13 +298,16 @@ def dump_mdata(iso: image.Image) -> None:
         The ISO to query
 
     """
-    json_data = iso.query_content()
+    json_data = iso.query_content(supported_pids=True)
 
     mdata = json_data["mdata"]
-    groups = json_data.get("groups", [])
+    rpm_group_names = iso.list_rpm_groups()
+    rpm_groups = [
+        g for g in json_data.get("groups", []) if g["name"] in rpm_group_names
+    ]
     # Go through all the groups and collect the rpms
     mdata["rpms"] = {}
-    for group in groups:
+    for group in rpm_groups:
         pkg_list: List[str] = []
         group_name = group["name"]
         pkgs = group["pkgs"]
@@ -331,6 +319,8 @@ def dump_mdata(iso: image.Image) -> None:
                     pkg[len("group.{}.packages/".format(group_name)) :]
                 )
         mdata["rpms"][group_name] = pkg_list
+    if iso.supports("query-content-supported-pids"):
+        mdata["supported-pids"] = json_data.get("supported_pids", {})
 
     # Add buildinfo
     try:
@@ -338,7 +328,7 @@ def dump_mdata(iso: image.Image) -> None:
     except Exception as exc:
         _log.error("Unable to add buildinfo: %s", exc)
     else:
-        mdata = _parse_buildinfo(buildinfo, mdata)
+        mdata = gisoutils.parse_buildinfo_mdata(buildinfo, mdata)
 
     # Add label
     if isoglobals.LNT_GISO_LABEL not in mdata:
@@ -367,6 +357,17 @@ def dump_mdata(iso: image.Image) -> None:
         mdata["optional-packages"] = dict(
             (group, pkgs) for (group, pkgs) in data.items()
         )
+
+    # Update the metadata with the key requests
+    try:
+        key_requests = iso.list_key_requests()
+    except image.CapabilityNotSupported as exc:
+        _log.debug(str(exc))
+    except Exception as exc:
+        _log.error("Unable to add key requests: %s", exc)
+    else:
+        mdata["key-requests"] = key_requests
+
     json.dump(mdata, sys.stdout, indent=4, sort_keys=True)
 
 
@@ -432,6 +433,8 @@ def _run_isols_cmds(args: argparse.Namespace) -> None:
             group_tags=["partner_packages"],
             print_json=args.json,
         )
+    elif args.KEYREQUESTS:
+        display_key_requests(iso, print_json=args.json)
     elif args.GROUPS:
         list_packages(iso, groups=True, print_json=args.json)
     elif args.DUMP_MDATA:
@@ -541,6 +544,13 @@ def _parse_args(argv: List[str]) -> argparse.Namespace:
         dest="XRPACKAGES",
         default=False,
         help="List all Cisco IOS XR RPMs in the ISO",
+        action="store_true",
+    )
+    isols_group.add_argument(
+        "--key-requests",
+        dest="KEYREQUESTS",
+        default=False,
+        help="List all key requests in the ISO",
         action="store_true",
     )
     isols_group.add_argument(

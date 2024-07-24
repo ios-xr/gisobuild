@@ -27,24 +27,9 @@ import functools
 import logging
 import pathlib
 import tempfile
+from typing import Iterator, List, Mapping, Optional, Sequence, Set, Union
 
-from typing import (
-    Iterator,
-    List,
-    Mapping,
-    Optional,
-    Sequence,
-    Set,
-    Union,
-)
-
-
-from . import _blocks
-from . import _isoformat
-from . import _multiprocessing
-from . import _packages
-from . import _runrpm
-
+from . import _blocks, _isoformat, _multiprocessing, _packages, _runrpm
 
 _logger = logging.getLogger(__name__)
 

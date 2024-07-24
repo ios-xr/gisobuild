@@ -21,7 +21,6 @@ or implied.
 import argparse
 import sys
 
-
 from .. import check_requirements
 
 

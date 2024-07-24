@@ -27,23 +27,22 @@ __all__ = (
 
 import argparse
 import datetime
-import itertools
-import os
 import glob
-import typing
+import itertools
 import logging
+import os
 import pathlib
 import secrets
 import shutil
 import sys
 import tempfile
 import types
+import typing
+from typing import Dict, Iterator, List, NoReturn, Optional, Tuple
 
-from typing import Iterator, List, NoReturn, Optional, Tuple, Dict
-
-from . import gisoutils
 from . import _subprocs
 from . import gisoglobals as gglobals
+from . import gisoutils
 
 # This image version *MUST* be updated whenever the built container changes
 # (e.g. Dockerfile change).
@@ -211,9 +210,13 @@ def _get_volumes_to_mount(args: argparse.Namespace, infile: str) -> List[str]:
         for repo in args.repo:
             vol_map_list.append(os.path.normpath(repo))
 
-    if args.bridge_fixes:
+    if not args.exriso and args.bridge_fixes:
         for repo in args.bridge_fixes:
             vol_map_list.append(os.path.normpath(repo))
+
+    if args.key_requests:
+        for key_request in args.key_requests:
+            vol_map_list.append(os.path.normpath(key_request))
 
     if args.optimize:
         o_path = pathlib.Path(__file__).parents[3] / "exr"
@@ -426,8 +429,14 @@ def _build_giso(
         # We mount the tool one label up instead of 'src' so as to expose
         # signing tools to the gisobuild script.
         src_dir = _find_dockerfile().parents[1]
-    else:
-        src_dir = _find_dockerfile().parent / "src"
+        o_path = pathlib.Path(__file__).parents[3] / "exr"
+        if str(o_path) not in sys.path:
+            sys.path.append(str(o_path))
+        import exr  # pylint: disable=import-error
+
+        return exr.runCubesGISOBuild(src_dir.__str__(), infile, args)
+
+    src_dir = _find_dockerfile().parent / "src"
     giso_build_cmd = []
     giso_build_cmd.extend([_containertool, "run", "--name", container_name])
     giso_build_cmd.extend(["-v", f"{str(src_dir)}:/app/gisobuild:ro"])
@@ -437,26 +446,10 @@ def _build_giso(
             for vol in _get_volumes_to_mount(args, infile)
         )
     )
-    if args.optimize:
-        # Creating the signing environment and mounting it at '/app/signing_env'
-        # of the container.
-        signing_env = _pull_signing_env(args)
-        giso_build_cmd.extend(["-v", f"{signing_env}:/app/signing_env"])
-        for var_name, value in _get_env_vars().items():
-            giso_build_cmd.extend(["-e", f"{var_name}={value}"])
-    if args.optimize:
-        giso_build_cmd.extend(
-            [
-                image,
-                "/app/gisobuild/giso/src/gisobuild.py",
-                "--yamlfile",
-                infile,
-            ]
-        )
-    else:
-        giso_build_cmd.extend(
-            [image, "/app/gisobuild/gisobuild.py", "--yamlfile", infile]
-        )
+    add_exr_env_vars(giso_build_cmd)
+    giso_build_cmd.extend(
+        [image, "/app/gisobuild/gisobuild.py", "--yamlfile", infile]
+    )
     try:
         logger.debug(giso_build_cmd)
         result = _subprocs.execute(giso_build_cmd, verbose_logging=False)
@@ -509,14 +502,23 @@ def _main(
         Name and tag of the image to use.
 
     """
-
+    is_exrbuild: bool = args.exriso
     args.__dict__ = gisoutils.load_yaml_giso_arguments(infile)
-
+    args.__dict__["exriso"] = is_exrbuild
     logger.info("\nRunning GISO build...")
     output = _build_giso(args, infile, container_name, image)
+    # debug until we see 'System req...' and once we see that line,
+    # we print all subsequent lines to the console. This is done to avoid
+    # printing unnecessary info to the console.
+    printToConsole: bool = False
     for line in output.splitlines():
+        if "System requirements check" in line:
+            printToConsole = True
         if line:
-            logger.info(line)
+            if printToConsole:
+                logger.info(line)
+            else:
+                logger.debug(line)
 
 
 def _execute_build(cli_args: argparse.Namespace) -> None:
@@ -544,12 +546,7 @@ def _execute_build(cli_args: argparse.Namespace) -> None:
     unified_repo = unify_staging(cli_args)
     infile = system_build_prep_env(cli_args)
     logger.info("Setting up container environment...")
-    if cli_args.exriso and (
-        hasattr(cli_args, "optimize") and cli_args.optimize
-    ):
-        image = _build_optim_image()
-    else:
-        image = _ensure_image()
+    image = _ensure_image()
     logger.info("Container Image: %s", image)
     container_name = _gen_container_name()
     try:
@@ -563,18 +560,12 @@ def _execute_build(cli_args: argparse.Namespace) -> None:
         if unified_repo:
             unified_repo.cleanup()
         try:
-            img_dir = _stage_artefacts(out_dir, container_name)
-            _subprocs.execute(
-                [_containertool, "rm", "-f", container_name],
-                verbose_logging=False,
-            )
-            if cli_args.optimize and cli_args.in_docker:
+            if not cli_args.optimize:
+                img_dir = _stage_artefacts(out_dir, container_name)
                 _subprocs.execute(
-                    [_containertool, "rmi", "-f", image], verbose_logging=False
+                    [_containertool, "rm", "-f", container_name],
+                    verbose_logging=False,
                 )
-                dirs = glob.glob(f"{cli_args.out_directory}/signing_env-*")
-                for _dir in dirs:
-                    shutil.rmtree(_dir)
         except RuntimeError:
             _fatal_error("GISO build failed. Nothing to stage.")
         except _subprocs.CalledProcessError:
@@ -650,3 +641,21 @@ def _get_env_vars() -> Dict[str, str]:
     import exr  # pylint: disable=import-error
 
     return exr.ENV_VARS
+
+
+def add_exr_env_vars(gbuild_cmd: List[str]) -> None:
+    """
+        pass eXR spececific env variables to gisocontainer.
+        if the path is not accesible inside the container, mount the path at
+        appropriate location
+    """
+
+    if "MATRIX_INFO_PATH" in os.environ:
+        mtrix_file = pathlib.Path(str(os.environ["MATRIX_INFO_PATH"]))
+        logger.info("Using custom compatibility matrix: %s", mtrix_file)
+        gbuild_cmd.extend(
+            ["-v", f"{mtrix_file}:/app/matrix_info_path/upgrade_matrix/:ro"]
+        )
+        gbuild_cmd.extend(
+            ["-e", "MATRIX_INFO_PATH=/app/matrix_info_path/upgrade_matrix/"]
+        )

@@ -32,11 +32,9 @@ or implied.
 # And print the 'highest' one. In this case, it prints: ",x,z"
 import argparse
 import sys
-
 from typing import Sequence, Tuple
 
 import rpm
-
 
 _EVRType = Tuple[str, str, str]
 

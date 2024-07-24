@@ -24,14 +24,14 @@ import getpass
 import logging
 import os
 import pathlib
-import shutil
+import re
 import shlex
+import shutil
 import socket
 import stat
 import subprocess
 import sys
 import tempfile
-
 from logging import handlers
 from typing import Any, Dict, List, Tuple
 
@@ -244,6 +244,78 @@ def generate_buildinfo_mdata() -> Dict[str, str]:
     new_mdata[gisoglobals.LNT_GISO_BUILDER] = getpass.getuser()
     new_mdata[gisoglobals.LNT_GISO_BUILD_HOST] = socket.gethostname()
     new_mdata[gisoglobals.LNT_GISO_BUILD_DIR] = os.getcwd()
+
+    return new_mdata
+
+
+def format_buildinfo_mdata(buildinfo: str, new_mdata: Dict[str, str]) -> str:
+    """
+    Format the GISO build information into a human-readable string.
+
+    :param buildinfo:
+        The existing build-info.txt contents as a string.
+    :param new_mdata:
+        The new metadata to add to the build-info.txt file.
+
+    :returns:
+        Build information as a string for use in the build-info.txt file.
+    """
+    mdata_key_to_prefix_str = {
+        gisoglobals.LNT_GISO_BUILD_TIME: "GISO build time",
+        gisoglobals.LNT_GISO_BUILD_CMD: "GISO build command",
+        gisoglobals.LNT_GISO_BUILDER: "GISO builder",
+        gisoglobals.LNT_GISO_BUILD_HOST: "GISO build host",
+        gisoglobals.LNT_GISO_BUILD_DIR: "GISO build directory",
+    }
+
+    # Remove any existing GISO build entries from the build-info.txt contents.
+    output_buildinfo = buildinfo
+    for prefix in mdata_key_to_prefix_str.values():
+        output_buildinfo = re.sub(f"{prefix}.*\n", "", output_buildinfo)
+
+    # Add the new GISO build entries to the build-info.txt contents.
+    for key, prefix in mdata_key_to_prefix_str.items():
+        if key in new_mdata:
+            output_buildinfo += f"{prefix}: {new_mdata[key]}\n"
+
+    return output_buildinfo
+
+
+def parse_buildinfo_mdata(
+    buildinfo: str, mdata: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Populate any missing buildinfo fields in ISO metadata with info from
+    image.py's show-buildinfo query. Existing fields are *not* overwritten
+
+    :param buildinfo:
+        Output from show-buildinfo
+
+    :param mdata:
+        The metadata to update with buildinfo
+
+    :returns:
+        The updated metadata
+
+    """
+    # Store of metadata keys vs the corresponding starts of line.
+    mdata_key_line = (
+        (gisoglobals.LNT_GISO_BUILDER, "User = "),
+        (gisoglobals.LNT_GISO_BUILD_HOST, "Host = "),
+        (gisoglobals.LNT_GISO_BUILD_DIR, "Workspace = "),
+        (gisoglobals.LNT_GISO_BUILD_TIME, "Built on: "),
+        (gisoglobals.LNT_XR_VERSION, "XR version = "),
+    )
+    new_mdata = {}
+    for line in buildinfo.splitlines():
+        for k, line_start in mdata_key_line:
+            if line.startswith(line_start):
+                new_mdata[k] = line[len(line_start) :]
+                break
+
+    _log.debug("Build metadata parsed from build-info.txt: %s", new_mdata)
+
+    new_mdata.update(mdata)
 
     return new_mdata
 

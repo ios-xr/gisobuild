@@ -27,7 +27,6 @@ __all__ = (
     "QueryContentError",
 )
 
-from dataclasses import dataclass
 import json
 import logging
 import os
@@ -35,17 +34,26 @@ import pathlib
 import re
 import subprocess
 import sys
+from dataclasses import dataclass
+from functools import lru_cache
 from tempfile import TemporaryDirectory
 from typing import Any, Dict, Generator, List, Optional, Set, Tuple, cast
 
-from . import builder
-from . import gisoutils
+from . import builder, gisoutils
 from . import lnt_gisoglobals as gisoglobals
 
 _log = logging.getLogger()
 
 
 _XR_FOUNDATION = "xr-foundation"
+
+# Attributes that indicate a group contains RPMs.
+_RPM_GROUP_ATTRS = [
+    "install",
+    "owner_packages",
+    "partner_packages",
+    "bridging",
+]
 
 ###############################################################################
 #                               Custom exceptions                             #
@@ -412,9 +420,6 @@ class Image:
         except KeyError as error:
             raise InvalidVersionOutputError(str(error)) from error
 
-        # Cache for group information etc
-        self._content: Optional[Dict[str, Any]] = None
-
         # The capabilities and version are printed to stdout if successful
         _log.debug("Using version number %s", self._version)
 
@@ -555,33 +560,58 @@ class Image:
             log_dir=self.log_dir,
         )
 
-    def query_content(self) -> Dict[str, Any]:
+    @lru_cache(maxsize=8)
+    def query_content(self, supported_pids: bool = False) -> Dict[str, Any]:
         """
         Query the ISO to return JSON data containing ISO metadata
 
+        :param supported_pids:
+            Include supported PIDs information. This requires image.py to
+            parse XML repodata in the ISO.
         """
 
         _log.debug("Querying ISO")
-        if self._content:
-            _log.debug("... used cache")
-            return self._content
 
-        try:
-            output = self._call_image_py_if_caps_supported(
-                iso=self.iso, operation="query-content", log_dir=self.log_dir,
-            )
+        try_query_content = False
+        if supported_pids:
             try:
-                json_data = json.loads(output)
-            except json.decoder.JSONDecodeError as error:
-                raise QueryContentError(str(error)) from error
-        except CapabilityNotSupported:
+                output = self._call_image_py_if_caps_supported(
+                    iso=self.iso,
+                    operation="query-content",
+                    args=["--supported-pids"],
+                    caps="query-content-supported-pids",
+                    log_dir=self.log_dir,
+                )
+                try:
+                    json_data = json.loads(output)
+                except json.decoder.JSONDecodeError as error:
+                    raise QueryContentError(str(error)) from error
+            except CapabilityNotSupported:
+                try_query_content = True
+        else:
+            try_query_content = True
+
+        fallback_isoinfo = False
+        if try_query_content:
+            try:
+                output = self._call_image_py_if_caps_supported(
+                    iso=self.iso,
+                    operation="query-content",
+                    log_dir=self.log_dir,
+                )
+                try:
+                    json_data = json.loads(output)
+                except json.decoder.JSONDecodeError as error:
+                    raise QueryContentError(str(error)) from error
+            except CapabilityNotSupported:
+                fallback_isoinfo = True
+
+        if fallback_isoinfo:
             cmd = [
                 gisoutils.get_isoinfo(),
                 "-R",
                 "-x",
-                os.path.join(
-                    "/" + gisoglobals.LNT_MDATA_DIR, gisoglobals.LNT_MDATA_FILE
-                ),
+                "/" + str(gisoglobals.LNT_MDATA_PATH),
                 "-i",
                 self.iso,
             ]
@@ -594,13 +624,15 @@ class Image:
                 ).stdout.decode("utf-8")
             except subprocess.CalledProcessError as error:
                 raise ImageScriptExecutionError(error) from error
+
             try:
-                json_data = {gisoglobals.LNT_MDATA_DIR: json.loads(output)}
+                json_data = {
+                    str(gisoglobals.LNT_MDATA_DIR): json.loads(output)
+                }
             except json.decoder.JSONDecodeError as error:
                 raise QueryContentError(str(error)) from error
 
-        self._content = cast(Dict[str, Any], json_data)
-        return self._content
+        return cast(Dict[str, Any], json_data)
 
     def get_repodata(self, group: str) -> str:
         """
@@ -661,11 +693,15 @@ class Image:
             log_dir=self.log_dir,
         )
 
-    def list_groups(self) -> List[str]:
-        """List all the groups within the ISO."""
+    def list_rpm_groups(self) -> List[str]:
+        """List all the groups that may contain RPMs within the ISO."""
         content = self.query_content()
-        result = list(group["name"] for group in content["groups"])
-        return result
+        rpm_groups = set()
+        for attr in _RPM_GROUP_ATTRS:
+            rpm_groups.update(
+                gisoutils.get_groups_with_attr(content["groups"], attr)
+            )
+        return sorted(list(rpm_groups))
 
     def extract_groups(self, groups: List[str], output_dir: str) -> None:
         """Extracts the specified groups to the given output directory."""
@@ -685,6 +721,13 @@ class Image:
             log_dir=self.log_dir,
         )
         return [pkg for pkg in pkgs.split("\n") if pkg != ""]
+
+    def list_squashfs(self) -> List[str]:
+        """List all the files in the squashfs."""
+        files = self._call_image_py_if_caps_supported(
+            iso=self.iso, operation="list-squashfs", log_dir=self.log_dir,
+        )
+        return [file for file in files.split("\n") if file]
 
     def show_label(self) -> str:
         """Returns the label of the ISO."""
@@ -743,6 +786,21 @@ class Image:
 
             # The direct return from image.py includes a terminating newline char.
             return "\n".join(retval) + "\n"
+
+    def list_pids(self) -> str:
+        """Returns a list of PIDs that this ISO supports."""
+        return self._call_image_py_if_caps_supported(
+            iso=self.iso,
+            operation="list-pids",
+            log_dir=self.log_dir,
+            caps="list-pids",
+        )
+
+    def list_key_requests(self) -> List[str]:
+        """Returns a list of key requests in the ISO."""
+        return self._call_image_py_if_caps_supported(
+            iso=self.iso, operation="list-key-requests", log_dir=self.log_dir,
+        ).splitlines()
 
     ###############################################################################
     #                        Data handling of image.py                            #
@@ -844,7 +902,7 @@ class Image:
         self,
     ) -> Generator[Tuple[str, List["builder.Package"]], None, None]:
         """Generator returning a tuple of (group name, packages)."""
-        for group in self.list_groups():
+        for group in self.list_rpm_groups():
             # Get repo-data for each group
             data = self.get_repodata(group)
             if not data:
@@ -858,6 +916,54 @@ class Image:
 
             yield (group, pkgs)
 
+    def _get_required_or_optional_pkgs(
+        self, optional: bool
+    ) -> Dict[str, List[str]]:
+        """
+        Get a dict of all the required or optional packages in the ISO, grouped
+        by the group they are in.
+
+        :param optional:
+            If True, get the optional packages, otherwise get the required
+            packages.
+
+        """
+        requested_pkgs = {}
+        all_pkgs: Set[builder.Package] = set()
+        packages = {}
+
+        for group, pkgs in self._get_packages_per_group():
+            if pkgs:
+                packages[group] = pkgs
+                all_pkgs |= set(pkgs)
+        if not all_pkgs:
+            _log.info("No packages in the repodata")
+            return {}
+
+        foundation_pkg = builder.get_xr_foundation_package(all_pkgs)
+
+        for group, pkgs in packages.items():
+            if optional:
+                group_pkgs = builder.get_xr_optional_packages(
+                    foundation_pkg, pkgs
+                )
+            else:
+                group_pkgs = builder.get_xr_required_packages(
+                    foundation_pkg, pkgs
+                )
+            _log.info(
+                "%s packages for group %s: %s",
+                "Optional" if optional else "Required",
+                group,
+                group_pkgs,
+            )
+            if group_pkgs:
+                requested_pkgs[group] = [
+                    pkg.name for pkg in sorted(group_pkgs, key=str)
+                ]
+
+        return requested_pkgs
+
     def get_required_pkgs(self) -> Dict[str, List[str]]:
         """
         Get a dict of all the required packages (those packages that are
@@ -865,24 +971,7 @@ class Image:
         they are in.
 
         """
-        required_packages = {}
-
-        for group, pkgs in self._get_packages_per_group():
-            if pkgs:
-                foundation_pkg = builder.get_xr_foundation_package(pkgs)
-                if foundation_pkg:
-                    pkgs = builder.get_xr_required_packages(
-                        foundation_pkg, pkgs
-                    )
-                else:
-                    pkgs = []
-
-            if pkgs:
-                required_packages[group] = [
-                    pkg.name for pkg in sorted(pkgs, key=str)
-                ]
-
-        return required_packages
+        return self._get_required_or_optional_pkgs(optional=False)
 
     def get_optional_pkgs(self) -> Dict[str, List[str]]:
         """
@@ -891,39 +980,4 @@ class Image:
         they are in.
 
         """
-
-        optional_packages = {}
-        required_pkgs: Set[builder.Package] = set()
-        all_pkgs: Set[builder.Package] = set()
-        packages = {}
-
-        for group, pkgs in self._get_packages_per_group():
-            if not pkgs:
-                continue
-            packages[group] = pkgs
-            all_pkgs |= set(pkgs)
-        if not all_pkgs:
-            _log.info("No packages in the repodata")
-            return {}
-
-        foundation_pkg = builder.get_xr_foundation_package(all_pkgs)
-
-        if foundation_pkg:
-            for pkgs in packages.values():
-                required_pkgs |= set(
-                    builder.get_xr_required_packages(foundation_pkg, pkgs)
-                )
-        else:
-            _log.info("No foundation package")
-
-        for group, pkgs in packages.items():
-            opt_pkgs = builder.get_xr_optional_packages(
-                foundation_pkg, pkgs, required_pkgs=required_pkgs,
-            )
-            _log.info("Optional packages for group %s: %s", group, opt_pkgs)
-            if opt_pkgs:
-                optional_packages[group] = [
-                    pkg.name for pkg in sorted(opt_pkgs, key=str)
-                ]
-
-        return optional_packages
+        return self._get_required_or_optional_pkgs(optional=True)

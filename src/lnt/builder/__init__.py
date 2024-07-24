@@ -30,11 +30,11 @@ __all__ = (
 )
 
 
-from ._build import run
-from ._coordinate import ReqPackageBeingRemovedError
-from ._packages import get_packages_from_repodata, Package
 from ._blocks import (
     get_xr_foundation_package,
     get_xr_optional_packages,
     get_xr_required_packages,
 )
+from ._build import run
+from ._coordinate import ReqPackageBeingRemovedError
+from ._packages import Package, get_packages_from_repodata

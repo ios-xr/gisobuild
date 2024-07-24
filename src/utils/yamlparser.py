@@ -20,9 +20,9 @@ or implied.
 
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, TextIO
-import yaml
 
 import validate.validate as validate
+import yaml
 
 
 @dataclass
@@ -41,6 +41,10 @@ class Packages:
     skip_usb_image: bool
     skip_dep_check: bool
     clear_bridging_fixes: bool
+    only_support_pids: Optional[List[str]]
+    key_requests: List[str]
+    remove_all_key_requests: bool
+    remove_key_requests: List[str]
 
     @classmethod
     def from_dict(cls, ydict: Dict[str, Any]) -> "Packages":
@@ -56,6 +60,10 @@ class Packages:
         skip_usb_image = False
         skip_dep_check = False
         clear_bridging_fixes = False
+        only_support_pids: Optional[List[str]] = None
+        key_requests: List[str] = []
+        remove_all_key_requests = False
+        remove_key_requests: List[str] = []
 
         if ydict:
             iso = ydict.get("iso", "")
@@ -109,6 +117,22 @@ class Packages:
                 clear_bridging_fixes = ydict.get("clear-bridging-fixes", False)
             elif ydict.get("clear_bridging_fixes"):
                 clear_bridging_fixes = ydict.get("clear_bridging_fixes", False)
+
+            if ydict.get("only-support-pids"):
+                only_support_pids = ydict.get("only-support-pids")
+            elif ydict.get("only_support_pids"):
+                only_support_pids = ydict.get("only_support_pids")
+
+            key_requests.extend(ydict.get("key-requests", []))
+            key_requests.extend(ydict.get("key_requests", []))
+
+            remove_all_key_requests = ydict.get(
+                "remove-all-key-requests", False
+            ) or ydict.get("remove_all_key_requests", False)
+
+            remove_key_requests.extend(ydict.get("remove-key-requests", []))
+            remove_key_requests.extend(ydict.get("remove_key_requests", []))
+
         return validate.create(
             cls,
             {
@@ -121,6 +145,10 @@ class Packages:
                 "skip_dep_check": skip_dep_check,
                 "bridge_fixes": bridge_fixes,
                 "clear_bridging_fixes": clear_bridging_fixes,
+                "only_support_pids": only_support_pids,
+                "key_requests": key_requests,
+                "remove_all_key_requests": remove_all_key_requests,
+                "remove_key_requests": remove_key_requests,
             },
         )
 
@@ -136,6 +164,7 @@ class UserContent:
     xrconfig: str = ""
     buildinfo: str = ""
     ztp_ini: str = ""
+    no_buildinfo: bool = False
 
     @classmethod
     def from_dict(cls, ydict: Dict[str, Any]) -> "UserContent":
@@ -144,10 +173,12 @@ class UserContent:
         xrconfig = ""
         buildinfo = ""
         ztp_ini = ""
+        no_buildinfo = False
         if ydict:
             script = ydict.get("script") or ""
             xrconfig = ydict.get("xrconfig") or ""
             buildinfo = ydict.get("buildinfo") or ""
+            no_buildinfo = ydict.get("no_buildinfo", False)
 
             # The arguments appear as ztp-ini in the yaml file but
             # ztp_ini in the args namespace
@@ -162,6 +193,7 @@ class UserContent:
                 "xrconfig": xrconfig,
                 "buildinfo": buildinfo,
                 "ztp_ini": ztp_ini,
+                "no_buildinfo": no_buildinfo,
             },
         )
 
@@ -289,7 +321,6 @@ class CliConfigFromYaml:
     configdict: Dict[str, Any] = {}
 
     def __init__(self, fd: TextIO) -> None:
-
         params = yaml.safe_load(fd)
 
         # Package selection parameters
@@ -332,7 +363,6 @@ class CliConfigToYaml:
     configstr = ""
 
     def __init__(self, cli_args: Dict[str, Any]) -> None:
-
         # Package selection parameters
         self.packages = Packages.from_dict(cli_args)
 

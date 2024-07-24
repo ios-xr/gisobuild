@@ -18,8 +18,8 @@ or implied.
 
 """
 
-import tempfile
 import pathlib
+import tempfile
 
 GISO_PKG_FMT_VER = 1.0
 
@@ -60,6 +60,7 @@ EXR_SUPPORTED_PLATFORMS = [
 
 FILE_TYPE_RPM = "RPM"
 FILE_TYPE_ISO = "ISO"
+FILE_TYPE_UDF = "UDF"
 FILE_TYPE_TEXT = "TEXT"
 FILE_TYPE_TAR = "TAR"
 FILE_TYPE_UNKNOWN = "UNKNOWN"
@@ -67,6 +68,7 @@ FILE_TYPE_UNKNOWN = "UNKNOWN"
 file_types = {
     FILE_TYPE_RPM: ["RPM"],
     FILE_TYPE_ISO: ["ISO", "9660", "CD-ROM"],
+    FILE_TYPE_UDF: ["UDF"],
     FILE_TYPE_TAR: ["POSIX", "tar", "archive"],
     FILE_TYPE_TEXT: ["ASCII"],
 }
@@ -104,6 +106,10 @@ EXR_CLI_DICT_MAP = {
     "debug": "debug",
     "isoinfo": None,
     "image_script": None,
+    "key_requests": None,
+    "remove_all_key_requests": None,
+    "remove_key_requests": None,
+    "no_buildinfo": None,
 }
 
 LNT_CLI_DICT_MAP = {
@@ -139,6 +145,11 @@ LNT_CLI_DICT_MAP = {
     "debug": "debug",
     "isoinfo": "isoinfo",
     "image_script": "image_script",
+    "only_support_pids": "only_support_pids",
+    "key_requests": "key_requests",
+    "remove_all_key_requests": "remove_all_key_requests",
+    "remove_key_requests": "remove_key_requests",
+    "no_buildinfo": "no_buildinfo",
 }
 
 # Name of JSON checksum file

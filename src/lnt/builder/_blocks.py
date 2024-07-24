@@ -47,8 +47,7 @@ from typing import (
     Union,
 )
 
-from . import _isoformat
-from . import _packages
+from . import _isoformat, _packages
 
 _log = logging.getLogger(__name__)
 
@@ -106,7 +105,7 @@ def is_xr_installable_pkg(pkg: _packages.Package) -> bool:
     )
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True)
 class Block:
     """
     Representation of a regular, partitioned block.
@@ -129,7 +128,8 @@ class Block:
 
     .. attribute:: partition_pkgs
 
-        All partition packages for the block.
+        All partition packages for the block. This may also contain per-pid
+        third party packages, such as SDK packages.
 
     """
 
@@ -156,13 +156,14 @@ class Block:
     ) -> Optional[_packages.Package]:
         """Get the instance packages on the given PID."""
         # Instance packages have a requires tag for cisco-pid-<pid-name> to
-        # indicate it belongs on <pid-name>
+        # indicate it belongs on <pid-name>.
+        # If this is the xr-identifier package, then the instance package
+        # provides the tag instead.
         for pkg in self.instance_pkgs:
-            if (
-                _get_requires_by_name(
-                    pkg, f"{_isoformat.CISCO_PID_PREFIX}{pid}"
-                )
-                is not None
+            if _get_requires_by_name(
+                pkg, f"{_isoformat.CISCO_PID_PREFIX}{pid}"
+            ) is not None or _get_provides_by_name(
+                pkg, f"{_isoformat.CISCO_PID_PREFIX}{pid}"
             ):
                 return pkg
         return None
@@ -172,12 +173,15 @@ class Block:
     ) -> Set[_packages.Package]:
         """Get the partition packages for the given instance package."""
         # Instance packages have a requires tag on the appropriate partition
-        # packages. They will be of the format "<block-name>-<partition-hash>"
-        # so look for any requires that start "<block-name>-" and match those
-        # against the partition package names.
+        # packages.
+        # - In the case of XR blocks, they will be of the format
+        #   "<block-name>-<partition-hash>"
+        # - In the case of per-PID Tie-blocks, they have no specific format.
+        # So check all requires tags of the package to see if any of them
+        # match a partition package.
         out = set()
         name_to_partition = {pkg.name: pkg for pkg in self.partition_pkgs}
-        for req in _get_requires_by_prefix(instance, f"{self.name}-"):
+        for req in instance.requires:
             if req.name in name_to_partition:
                 out.add(name_to_partition[req.name])
         return out
@@ -201,6 +205,29 @@ class Block:
             pkgs.add(instance)
             pkgs |= self._get_partition_pkgs_for_instance(instance)
         return pkgs
+
+    def filter_pkgs(
+        self, pkgs_to_remove: Set[_packages.Package]
+    ) -> "FilteredBlock":
+        """
+        Return a FilteredBlock containing the packages in this block, minus
+        the given packages.
+
+        :param pkgs_to_remove:
+            Packages to remove.
+        """
+        return FilteredBlock(
+            self.name,
+            self.evra,
+            self.top_pkg,
+            self.instance_pkgs - pkgs_to_remove,
+            self.partition_pkgs - pkgs_to_remove,
+        )
+
+
+class FilteredBlock(Block):
+    """A Block whose packages have been filtered down to only support a subset
+    of PIDs on this platform."""
 
 
 @dataclasses.dataclass
@@ -372,6 +399,16 @@ class GroupedPackages:
             for pkg in block.all_pkgs
         ]
 
+    @property
+    def supported_pids(self) -> Set[str]:
+        """Iterate over all supported PIDs."""
+        return {
+            pid
+            for pid, _, _ in get_pid_identifier_packages(
+                self.get_all_pkgs(_isoformat.PackageGroup.INSTALLABLE_XR_PKGS)
+            )
+        }
+
     def get_all_pkgs(
         self, group: _isoformat.PackageGroup
     ) -> Set[_packages.Package]:
@@ -398,7 +435,7 @@ class GroupedPackages:
         """Get a mapping of PID to the packages on that PID."""
         pid_to_pkgs = dict()
         chosen_rp = None
-        for pid, pkg, card_type in _get_pid_identifier_packages(
+        for pid, pkg, card_type in get_pid_identifier_packages(
             self.get_all_pkgs(_isoformat.PackageGroup.INSTALLABLE_XR_PKGS)
         ):
             pid_to_pkgs[pid] = set([pkg])
@@ -553,8 +590,31 @@ class GroupedPackages:
         _log.debug(
             "Adding partition package %s to block %s", str(pkg), block_name
         )
-        self._check_pkg_can_be_added(self.blocks, block_name, pkg)
-        self.blocks[block_name][pkg.evra].partition_pkgs.add(pkg)
+        if pkg.evra in self.blocks[block_name]:
+            self.blocks[block_name][pkg.evra].partition_pkgs.add(pkg)
+        else:
+            # Check if this is a per-pid constituent third-party RPM. To
+            # determine this, we need to find the top-level package that this
+            # rebuilt TP RPM is associated with.
+            # If this package is associated with the block, there must be a
+            # dependency on the top-level package of the block.
+            top_level_reqs = [
+                req for req in pkg.requires if req.name == block_name
+            ]
+            if not top_level_reqs:
+                raise NoBlockForPkgError(block_name, pkg)
+            top_level_req = top_level_reqs[0]
+
+            # Now match the package to the correct version of the block.
+            matched = False
+            for block in self.blocks[block_name].values():
+                if top_level_req.version == block.evra.version.version:
+                    block.partition_pkgs.add(pkg)
+                    matched = True
+                    break
+
+            if not matched:
+                raise NoBlockForPkgError(block_name, pkg)
 
     def add_tied_pkg(
         self,
@@ -582,6 +642,52 @@ class GroupedPackages:
         self.partner_pkgs[pkg.name][pkg.evra] = Block(
             pkg.name, pkg.evra, pkg, set(), set()
         )
+
+    def filter_pkgs_to_supported_pids(
+        self, pids_to_support: List[str]
+    ) -> None:
+        """Remove all packages that are not associated with the given set of
+        PIDs to support."""
+        assert len(pids_to_support) > 0
+
+        pkgs_to_keep = set()
+        for block in self.all_blocks:
+            for pid in pids_to_support:
+                pkgs_to_keep |= block.get_pkgs_on_pid(pid)
+        pkgs_to_remove = self.get_all_pkgs_all_groups() - pkgs_to_keep
+
+        _log.debug(
+            "Packages marked for removal: %s", pkgs_to_remove,
+        )
+
+        def _remove_pkgs_from_group(
+            collection: Dict[str, Dict[_packages.EVRA, Block]]
+        ) -> None:
+            for block_name, block_versions in collection.items():
+                for block_evra, block in block_versions.items():
+                    # Block.get_pkgs_on_pid always returns the top pkg, so as
+                    # long as the ISO supports >0 PIDs, a block will never be
+                    # completely empty.
+                    assert len(set(block.all_pkgs) - pkgs_to_remove) > 0
+
+                    # Remove some pkgs from the block only if necessary
+                    if any((pkg in pkgs_to_remove) for pkg in block.all_pkgs):
+                        _log.debug(
+                            "Filtering block %s", str(block.name),
+                        )
+                        block_versions[block_evra] = block.filter_pkgs(
+                            pkgs_to_remove
+                        )
+
+            # Clear any empty block_version lists
+            for block_name in list(collection.keys()):
+                if not collection[block_name]:
+                    del collection[block_name]
+
+        _remove_pkgs_from_group(self.blocks)
+        # At the moment, all tie block, owner and partner packages go to all
+        # PIDs, so they can't be filtered. If this ever changes, the above
+        # function can be called on those fields to enable filtering.
 
 
 def _get_dep_by_name(
@@ -669,7 +775,7 @@ def _get_provides_by_prefix(
     yield from _get_deps_by_prefix(pkg.provides, prefix)
 
 
-def _get_pid_identifier_packages(
+def get_pid_identifier_packages(
     pkgs: Iterable[_packages.Package],
 ) -> Iterator[Tuple[str, _packages.Package, str]]:
     """
@@ -679,9 +785,9 @@ def _get_pid_identifier_packages(
 
     """
     for pkg in pkgs:
-        pid_deps = set()
-        for dep in _get_provides_by_prefix(pkg, _isoformat.CISCO_PID_PREFIX):
-            pid_deps.add(dep)
+        pid_deps = set(
+            _get_provides_by_prefix(pkg, _isoformat.CISCO_PID_PREFIX)
+        )
 
         if not pid_deps:
             # This package is not a PID identifier so move on
@@ -956,7 +1062,8 @@ def group_packages(pkgs: Iterable[_packages.Package]) -> GroupedPackages:
         else:
             remaining_pkgs.remove(pkg)
 
-    # Find and process block partition packages.
+    # Find and process block partition packages, and per-pid third-party
+    # packages.
     partition_pkgs = list(
         _get_partition_packages(all_block_names, remaining_pkgs)
     )

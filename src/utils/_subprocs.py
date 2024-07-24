@@ -23,11 +23,11 @@ __all__ = ("CalledProcessError", "execute", "execute_combined_stdout")
 
 import logging
 import subprocess
-from typing import Sequence
 
 # Re-export this so that users don't have to import subprocess as well as out
 # aim is to wrap it.
 from subprocess import CalledProcessError
+from typing import Sequence
 
 _logger = logging.getLogger(__name__)
 

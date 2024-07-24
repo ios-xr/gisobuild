@@ -27,19 +27,18 @@ __all__ = (
 
 import argparse
 import json
-import os
 import logging
+import os
 import pathlib
 import re
 import shutil
 import tempfile
-
 from typing import Optional
 
-from utils import gisoutils
 from utils import gisoglobals as gglobals
-from .. import gisoutils as lnt_utils
+from utils import gisoutils
 
+from .. import gisoutils as lnt_utils
 
 logger = logging.getLogger("launcher")
 

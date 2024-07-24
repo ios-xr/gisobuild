@@ -26,6 +26,8 @@ __all__ = (
     "add_bridging_bugfix",
     "get_zipped_and_unzipped_rpms",
     "remove_package",
+    "remove_all_key_requests",
+    "remove_key_requests",
     # Exceptions
     "ItemToAddNotSpecifiedError",
     "CopyPkgError",
@@ -40,16 +42,15 @@ import glob
 import json
 import logging
 import os
-from pathlib import Path
 import shutil
 import tarfile
-
+from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional
 
 from utils import gisoutils as ggisoutils
+
 from .. import gisoutils
 from . import _isoformat
-
 
 # -------------------------------------------------------------------------
 # Script global variables
@@ -148,7 +149,10 @@ class FileType(enum.Enum):
 
     .. attribute:: MDATA
 
-        The file being added is the ISO metadata file
+        The file being added is the ISO mdata.json file
+
+    ..attribute:: BUILDINFO
+        The file being added is the ISO build-info.txt file
 
     """
 
@@ -156,6 +160,7 @@ class FileType(enum.Enum):
     LABEL = "label"
     ZTP = "ztp"
     MDATA = "mdata"
+    BUILDINFO = "buildinfo"
 
 
 ###############################################################################
@@ -432,19 +437,21 @@ def add_package(
         source = pkg
     elif file_to_add and not group:
         # Map the file to the expected location in the ISO
-        if file_type == FileType.CONFIG:
+        if file_type is FileType.CONFIG:
             dest = os.path.join(iso_dir, _isoformat.ISO_PATH_INIT_CFG)
-        elif file_type == FileType.ZTP:
+        elif file_type is FileType.ZTP:
             dest = os.path.join(iso_dir, _isoformat.ISO_PATH_ZTP)
-        elif file_type == FileType.LABEL:
+        elif file_type is FileType.LABEL:
             dest = os.path.join(iso_dir, _isoformat.ISO_PATH_LABEL)
-        elif file_type == FileType.MDATA:
+        elif file_type is FileType.MDATA:
             if os.path.exists(
                 os.path.join(iso_dir, _isoformat.ISO_PATH_MDATA_751)
             ):
                 dest = os.path.join(iso_dir, _isoformat.ISO_PATH_MDATA_751)
             else:
                 dest = os.path.join(iso_dir, _isoformat.ISO_PATH_MDATA)
+        elif file_type is FileType.BUILDINFO:
+            dest = os.path.join(iso_dir, _isoformat.ISO_PATH_BUILDINFO)
         source = file_to_add
     else:
         raise ItemToAddNotSpecifiedError()
@@ -535,6 +542,77 @@ def clear_bridging_bugfixes(iso_dir: str, mdata: Dict[str, Any]) -> None:
         )
 
 
+def remove_all_key_requests(iso_dir: str, mdata: Dict[str, Any]) -> None:
+    """
+    Remove all key requests from the unpacked ISO.
+
+    :param iso_dir:
+        The directory in which the ISO has been unpacked.
+
+    :param mdata:
+        Iso metadata, as parsed json object returned from query content.
+
+    """
+    key_request_groups = gisoutils.get_groups_with_attr(
+        mdata["groups"], "key_packages"
+    )
+    for group in key_request_groups:
+        shutil.rmtree(
+            os.path.join(iso_dir, _isoformat.ISO_GROUP_PKG_DIR.format(group))
+        )
+        _log.debug(
+            "Removed key requests '%s'",
+            _isoformat.ISO_GROUP_PKG_DIR.format(group),
+        )
+
+
+def remove_key_requests(
+    iso_dir: str, mdata: Dict[str, Any], key_requests: List[str]
+) -> None:
+    """
+    Remove specified key requests from the unpacked ISO.
+
+    :param iso_dir:
+        The directory in which the ISO has been unpacked.
+
+    :param mdata:
+        Iso metadata, as parsed json object returned from query content.
+
+    :param key_requests:
+        Filenames of key requests to be removed.
+
+    """
+    key_request_groups = gisoutils.get_groups_with_attr(
+        mdata["groups"], "key_packages"
+    )
+    missing_key_requests: List[str] = key_requests.copy()
+    for group in key_request_groups:
+        packages_dir = os.path.join(
+            iso_dir, _isoformat.ISO_GROUP_PKG_DIR.format(group)
+        )
+        for key_request in key_requests:
+            key_request_path = os.path.join(
+                packages_dir, os.path.basename(key_request)
+            )
+            if os.path.exists(key_request_path):
+                os.remove(key_request_path)
+                missing_key_requests.remove(key_request)
+                _log.debug(
+                    "Removed key request '%s' in group '%s'",
+                    key_request,
+                    group,
+                )
+    if missing_key_requests:
+        msg = (
+            "Some user-specified key requests to be removed could not be found "
+            "in the ISO. This may be due to a user error: {}".format(
+                ", ".join(sorted(missing_key_requests))
+            )
+        )
+        _log.warning(msg)
+        print(f"WARNING: {msg}")
+
+
 def remove_package(pkg: str, iso_dir: str, mdata: Dict[str, Any]) -> None:
     """
     Remove any packages matching the given package name or pattern from any
@@ -551,12 +629,7 @@ def remove_package(pkg: str, iso_dir: str, mdata: Dict[str, Any]) -> None:
         Iso metadata, as parsed json object returned from query content
 
     """
-    installable_group_set = set()
-    for attr in _isoformat.INSTALLABLE_PKG_GROUP_ATTRS:
-        installable_group_set.update(
-            gisoutils.get_groups_with_attr(mdata["groups"], attr)
-        )
-    installable_groups = list(installable_group_set)
+    installable_groups = _isoformat.get_installable_groups(mdata["groups"])
 
     # Find all the packages that match the given pattern in the unpacked ISO
     # and remove them
@@ -570,7 +643,6 @@ def remove_package(pkg: str, iso_dir: str, mdata: Dict[str, Any]) -> None:
             for item in glob.iglob(search_pattern):
                 try:
                     os.remove(item)
-                    _log.debug("Removed package %s", item)
                 except OSError as error:
                     raise DeletePackageFailError(item, str(error)) from error
 

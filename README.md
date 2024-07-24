@@ -8,20 +8,25 @@ usage: gisobuild.py [-h] [--iso ISO] [--repo REPO [REPO ...]]
                     [--xrconfig XRCONFIG] [--ztp-ini ZTP_INI] [--label LABEL]
                     [--no-label] [--out-directory OUT_DIRECTORY]
                     [--create-checksum] [--yamlfile CLI_YAML] [--clean]
-                    [--pkglist PKGLIST [PKGLIST ...]] [--script SCRIPT]
-                    [--docker] [--x86-only] [--migration] [--optimize]
-                    [--full-iso]
+                    [--pkglist PKGLIST [PKGLIST ...]]
+                    [--key-requests KEY_REQUESTS [KEY_REQUESTS ...]]
+                    [--script SCRIPT] [--docker] [--x86-only] [--migration]
+                    [--optimize] [--full-iso]
                     [--remove-packages REMOVE_PACKAGES [REMOVE_PACKAGES ...]]
                     [--skip-usb-image] [--copy-dir COPY_DIRECTORY]
                     [--clear-bridging-fixes] [--verbose-dep-check] [--debug]
                     [--isoinfo ISOINFO] [--image-script IMAGE_SCRIPT]
-                    [--version]
+                    [--only-support-pids ONLY_SUPPORT_PIDS [ONLY_SUPPORT_PIDS ...]]
+                    [--remove-all-key-requests]
+                    [--remove-key-requests REMOVE_KEY_REQUESTS [REMOVE_KEY_REQUESTS ...]]
+                    [--no-buildinfo] [--version]
 
 Utility to build Golden ISO for IOS-XR.
 
 optional arguments:
   -h, --help            show this help message and exit
-  --iso ISO             Path to Mini.iso/Full.iso file
+  --iso ISO             Path to an input LNT ISO, EXR mini/full ISO, or a
+                        GISO.
   --repo REPO [REPO ...]
                         Path to RPM repository. For LNT, user can specify
                         .rpm, .tgz, .tar filenames, or directories. RPMs are
@@ -53,6 +58,9 @@ optional arguments:
                         package is in will be included as well. Package names
                         can be specified to include optional packages in the
                         output GISO.
+  --key-requests KEY_REQUESTS [KEY_REQUESTS ...]
+                        Key requests to package to be used when validating
+                        customer and partner RPMs.
   --docker, --use-container
                         Build GISO in container environment.Pulls and run pre-
                         built container image to build GISO.
@@ -89,21 +97,68 @@ LNT only build options:
                         packing/unpacking instead of the version extracted
                         from the ISO. It will not be inserted into the GISO.
                         Intended for debugging purposes only.
+  --only-support-pids ONLY_SUPPORT_PIDS [ONLY_SUPPORT_PIDS ...]
+                        Support only these hardware PIDs in the output ISO
+                        (e.g. '8800-RP' '8800-LC-36FH' '8800-LC-48H'); other
+                        PIDs from the input ISO will be removed. This option
+                        is generally used to reduce the size of the output
+                        ISO. Do not use this option before discussing with
+                        Cisco support.
+  --remove-all-key-requests
+                        Remove all key requests from the input ISO
+  --remove-key-requests REMOVE_KEY_REQUESTS [REMOVE_KEY_REQUESTS ...]
+                        Remove key requests, specified in a space separated
+                        list. These are matched against the filename, e.g.
+                        key_request.kpkg
+  --no-buildinfo        Do not update the build metadata in mdata.json with
+                        the GISO build information
 
 ```
 
 ## Description
 
-Typically Cisco releases IOS-XR software as a mini/base ISO which contains
-mandatory IOS-XR packages for a given platform and separately a set of
-optional packages and software patches for any bug fixes (SMU). 
-Optional package and SMU are in RPM packaging format.
+Typically, Cisco releases IOS-XR software as a mini/base ISO, which contains
+mandatory IOS-XR packages for a given platform and, separately, a set of
+optional packages and software patches for any bug fixes (SMU).
+Optional packages and SMUs are in RPM packaging format.
 
 The Golden ISO tool creates an ISO containing the full contents of
-the mini/base ISO together with optional packages and SMU of the user's
-choice. Once the Golden ISO is created it can be used either for iPXE booting
-a router or used for SU (system upgrade) from the current running version to
+the mini/base ISO, together with optional packages and SMU of the user's
+choice. Once the Golden ISO is created, it can be used either for iPXE booting
+a router or for SU (system upgrade) from the current running version to
 a new version of IOS-XR.
+
+
+### Reducing ISO size
+
+The tool also supports the creation of an ISO with certain hardware PIDs
+removed (via `--only-support-pids`), which can be used to reduce the size of
+the ISO. This option should be used with the following considerations:
+
+- The list of PIDs to support must all be supported by the input ISO. You can
+  check the supported PIDs with the `isols.py --dump-mdata` command.
+- If a distributed Route Processor PID is specified, then you must also specify
+  a distributed Line Card to support (and vice versa), otherwise the system
+  may not boot. Again, `isols.py --dump-mdata` can give you information about a
+  PID's card class.
+- Once support for a PID has been removed from an image, support cannot be
+  re-added to the output ISO - it's a one-way operation.
+- You should only remove support for hardware PIDs that you know won't ever be
+  present in the system that the GISO is intended for. Using such a GISO on a
+  system with unsupported hardware PIDs can lead to the system being unbootable.
+
+With this in mind, it is not recommended to use this option unless you have
+discussed it with Cisco support.
+
+### Key requests
+
+Key requests (AKA key packages) that should be onboarded for validating owner
+and partner RPMs can be specified using the `--key-requests <file1> <file2>`
+argument and removed using `--remove-all-key-requests` or
+`--remove-key-requests <file1> <file2>`.
+
+For instructions on creating and verifying key requests, see the
+[key-package-scripts repo](https://github.com/ios-xr/key-package-scripts/tree/master).
 
 ## Requirements
 
@@ -132,7 +187,7 @@ It also requires the following Python (>= 3.6) modules:
 * rpm
 * yaml
 
-# Invocation
+## Invocation
 
 This tool can be run natively on a Linux host if the dependencies above are met.
 Alternatively, the tool can also be run on a Linux system with Docker enabled
@@ -169,7 +224,7 @@ To run natively on a linux host which has dependency requirements met:
 
 The tool has a helpful usage info which lists down the options supported.
 
-When user does not want to specify the inputs via cli, an alternate would be to populate the yaml file template 
+When user does not want to specify the inputs via cli, an alternate would be to populate the yaml file template
 provided in the toolkit and pass the same via:
 
     ./src/gisobuild.py --yamlfile <input_yaml_cfg>
@@ -195,8 +250,101 @@ The corresponding GISO and build logs are available under the directory
 specified in `--out-directory`. The default if not specified is
 `<pwd>/output_gisobuild`.
 
+### Tips
 
-# Note: older version of the tool
+#### Specifying LNT bugfixes and packages
+
+> In the context of the LNT gisobuild tool, and LNT install operations, an XR
+package name refers to the "user installable" RPM and is the string prefix
+common to all RPMs associated with a block.
+
+You can put all your bugfixes and any optional packages in the same repository,
+and pass that to the CLI using the `--repo` flag. The tool will pick the correct
+RPMs to add to the GISO using the following logic:
+
+1. If no packages are specified via the `--pkglist` flag, then the latest
+of any packages in the repository that upgrade packages already in the input ISO
+will be included in the output GISO. Other optional packages, including those
+part of bugfixes that were incorporated into the GISO, will not be added to the
+output GISO.
+1. If any optional package names are given via the `--pkglist` flag, where the
+package is not part of the input ISO, the latest version of the package in the
+specified repository will be added to the output GISO. For XR packages all other
+RPMs in the same block will also be added to the output GISO.
+1. If full package filenames are given via the `--pkglist` flag, the specific
+version passed in will be included in the output GISO. If the package is part of
+a block, then all the packages in the block are added.
+
+Note that to specify a package in the way described by option 2, you just need
+to give the beginning part of the RPM filename that provides the package name,
+for example, if you have the following RPMs:
+
+```text
+$ ls /path/to/repo/optional-rpms/cdp/
+xr-cdp-0deb3755978fea2a-24.3.1v1.0.0-1.x86_64.rpm*
+xr-cdp-1b7551b6d2623937-24.3.1v1.0.0-1.x86_64.rpm*
+xr-cdp-24.3.1v1.0.0-1.x86_64.rpm*
+xr-cdp-734eb3104a06f199-24.3.1v1.0.0-1.x86_64.rpm*
+xr-cdp-8101-32h-24.3.1v1.0.0-1.x86_64.rpm*
+<snip>
+```
+
+instead of specifying each one, you can just run the gisobuild command as shown
+below:
+
+```text
+./gisobuild.py --iso /path/to/iso/8000-x64-24.1.2.iso --repo /path/to/repo/ --pkglist xr-cdp
+```
+
+Note that you do not need to provide the whole file name, or manually filter the
+RPMs added to the provided repository, as the script will do this for you.
+
+Regardless of what specific PIDs your devices include it is the default to
+include all RPMs in the GISOs built so there is no need to try to select for
+particular PIDs. You can create the GISO with the full set of RPMs, and when you
+come to installing the GISO on your router, the correct packages for the PIDs
+available will be installed, and any unsuitable ones will be ignored.
+
+Bugfixes can be included in the same repository as your packages.
+
+```text
+$ ls /path/to/repo/bugfixes/
+8000-x64-24.3.1-CSCab12345.tar.gz
+8000-x64-24.3.1-CSCzy54321.tar.gz
+```
+
+They do not need to be manually unpacked before building the GISO. Any bugfixes
+present in the given repository will be included in the GISO without needing to
+specify them.
+
+```text
+./gisobuild.py --iso /path/to/iso/8000-x64-24.3.1.iso --repo /path/to/repo/
+```
+
+Both RPMs and bugfixes can included in the GISO in a single command, as long as
+they are all in the repository. So the command above would also work if my
+repository looked like:
+
+```text
+$ tree /path/to/repo/
+/path/to/repo/
+├── bugfixes
+│   ├── 8000-x64-24.3.1-CSCab12345.tar.gz
+│   ├── 8000-x64-24.3.1-CSCzy54321.tar.gz
+│   ...
+└── optional-rpms
+    ├── cdp
+    │   ├── xr-cdp-0deb3755978fea2a-24.3.1v1.0.0-1.x86_64.rpm*
+    │   ├── xr-cdp-1b7551b6d2623937-24.3.1v1.0.0-1.x86_64.rpm*
+    │   ├── xr-cdp-24.3.1v1.0.0-1.x86_64.rpm*
+    │       ...
+    ├── telnet
+    │   ├── xr-telnet-0deb3755978fea2a-24.3.1.22Iv1.0.0-1.x86_64.rpm
+    │   ├── xr-telnet-24.3.1.22Iv1.0.0-1.x86_64.rpm
+    │       ...
+        ...
+
+## Note: older version of the tool
 
 The legacy eXR python2-based gisobuild utility is available at:
 

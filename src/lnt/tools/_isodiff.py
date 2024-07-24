@@ -23,7 +23,6 @@ __all__ = ("RPMQueryError", "run")
 
 import argparse
 import collections
-from dataclasses import asdict, dataclass
 import json
 import logging
 import os
@@ -31,15 +30,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
-
+from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Tuple
 
 import defusedxml.ElementTree as elemtree  # type: ignore
 
-from .. import (
-    gisoutils,
-    image,
-)
+from .. import gisoutils, image
 
 _log = logging.getLogger()
 
@@ -54,16 +50,6 @@ _RPM_DIFF = "rpm_db_diff.json"
 ###############################################################################
 #                                 Exceptions                                  #
 ###############################################################################
-
-
-class AttributeNotFoundError(Exception):
-    """Package is missing an attribute"""
-
-    def __init__(self, attr: str, error: str):
-        """Initialise a AttributeNotFoundError"""
-        super().__init__(
-            "Package missing the {} attribute: {}".format(attr, error)
-        )
 
 
 class OutputDirNotEmptyError(Exception):
@@ -444,6 +430,38 @@ def _get_iso_files(iso: image.Image) -> List[RPMFile]:
     )
 
 
+def _get_key_requests(iso: image.Image) -> List[RPMFile]:
+    """
+    Get the list of key requests present in an ISO.
+
+    :param iso:
+        The ISO to query.
+
+    :returns:
+        Key request files.
+
+    """
+
+    with tempfile.TemporaryDirectory() as extract_dir:
+        # Extract the key requests group from the ISO
+        iso.extract_groups(["keys"], extract_dir)
+        # Find the key requests that were extracted
+        key_request_dir = os.path.join("groups", "group.keys", "packages")
+        key_request_extract_dir = os.path.join(extract_dir, key_request_dir)
+        key_requests: List[RPMFile] = []
+        if os.path.exists(key_request_extract_dir):
+            key_requests = [
+                RPMFile(
+                    key_request,
+                    os.stat(
+                        os.path.join(key_request_extract_dir, key_request)
+                    ).st_size,
+                )
+                for key_request in listdir(key_request_extract_dir)
+            ]
+    return sorted(key_requests)
+
+
 def _get_package_lists(
     iso1: image.Image, iso2: image.Image
 ) -> Tuple[List[Package], List[Package], List[str], List[str]]:
@@ -472,7 +490,7 @@ def _get_package_lists(
         (iso1, pkg_list_1, groups_in_iso1),
         (iso2, pkg_list_2, groups_in_iso2),
     ]:
-        for group in iso.list_groups():
+        for group in iso.list_rpm_groups():
             try:
                 repodata = iso.get_repodata(group)
                 mdata = elemtree.fromstring(repodata)
@@ -711,6 +729,9 @@ def run_iso_diff(args: argparse.Namespace) -> None:
     # Get the list of files in the top level ISO and their sizes
     file_list_1 = _get_iso_files(iso1)
     file_list_2 = _get_iso_files(iso2)
+
+    file_list_1.extend(_get_key_requests(iso1))
+    file_list_2.extend(_get_key_requests(iso2))
 
     unchanged_file_list = []
     for _file_1 in file_list_1:

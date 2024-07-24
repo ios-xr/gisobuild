@@ -29,9 +29,8 @@ import sys
 # The use of abspath() is to address an issue with python3.6 where if isols.py
 # is run from the directory where the file is located the value of __file__ is
 # just ./isols.py rather than an absolute path.
-sys.path.append(str(pathlib.Path(os.path.abspath(__file__)).parents[1]))
+sys.path = [str(pathlib.Path(os.path.abspath(__file__)).parents[1])] + sys.path
 from lnt import tools
-
 
 if __name__ == "__main__":
     tools.isodiff(sys.argv[1:])
