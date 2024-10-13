@@ -271,6 +271,7 @@ class Options:
     migration: bool = False
     optimize: bool = False
     x86_only: bool = False
+    bes_logging: bool = False
 
     isoinfo: Optional[str] = None
     image_script: Optional[str] = None
@@ -284,6 +285,7 @@ class Options:
         migration: bool = False
         optimize: bool = False
         x86_only: bool = False
+        bes_logging: bool = False
 
         isoinfo: Optional[str] = None
         image_script: Optional[str] = None
@@ -295,6 +297,7 @@ class Options:
             optimize = ydict.get("optimize", False)
             fullISO = ydict.get("full-iso", False)
             x86_only = ydict.get("x86_only", False)
+            bes_logging = ydict.get("bes_logging", False)
             isoinfo = ydict.get("isoinfo", None)
             image_script = ydict.get("image_script", None)
 
@@ -307,6 +310,7 @@ class Options:
                 "migration": migration,
                 "optimize": optimize,
                 "x86_only": x86_only,
+                "bes_logging": bes_logging,
                 "isoinfo": isoinfo,
                 "image_script": image_script,
             },

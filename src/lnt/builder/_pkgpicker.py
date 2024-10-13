@@ -47,7 +47,9 @@ from typing import (
     TypeVar,
 )
 
-from . import _blocks, _file, _isoformat, _packages, _subprocs
+from utils import subprocs
+
+from . import _blocks, _file, _isoformat, _packages
 
 _log = logging.getLogger(__name__)
 
@@ -93,8 +95,8 @@ def _run_highest_pkg_version(
         "Determining highest package version with command: '%s'", " ".join(cmd)
     )
     try:
-        output = _subprocs.execute_combined_stdout(cmd)
-    except _subprocs.CalledProcessError as exc:
+        output = subprocs.execute_combined_stdout(cmd)
+    except subprocs.CalledProcessError as exc:
         raise HighestPkgVersionError(cmd, exc.output) from exc
 
     e, v, r = output.strip("\n").split(",")

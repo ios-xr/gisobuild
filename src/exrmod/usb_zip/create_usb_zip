@@ -12,6 +12,8 @@ set -e
 #$2 --> path to iso image
 
 MCOPY_ERR=0
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+EXTRACT_TOOL="$SCRIPT_DIR/extract_iso.sh"
 function recursive_mcopy()
 {
     SOURCE=$1
@@ -106,7 +108,7 @@ if [ -e $2 ]; then
 
   PLAT_DIR=$STG_DIR/$1
   if [ $PLAT == "iosxrwbd" ]; then
-      ISOREAD=$(which /auto/thirdparty-sdk/bin/isoread)
+      ISOREAD="iso-read"
   fi 
 
   if [ $PLAT == "ncs1k" ]; then
@@ -228,8 +230,14 @@ if [ -e $2 ]; then
   if [ $PLAT == "iosxrwbd" ]; then
       #Remove the default zip file created. DDC will use the below zip file.
       rm -f $cur_dir/$ZIP_FILE
-      ZIP_FILE=$PLAT-usb_boot-ddc.zip
-      $ISOREAD -i $ISO_FILE -o $STG_DIR
+      if [[ $ISO_FILE =~ "golden" ]]; then
+        ISO_VERSION=`isoinfo -i $2 -R -x /giso_info.txt | grep Version: | cut -d ' ' -f2`
+        ZIP_FILE=$PLAT-usb_boot-$ISO_VERSION.zip
+      else
+        ZIP_FILE=$PLAT-usb_boot-ddc.zip
+      fi
+      EXTRACT_CMD="$EXTRACT_TOOL -i $ISO_FILE -o $STG_DIR"
+      eval $EXTRACT_CMD
       mv $EFI_DIR/grub-cc.efi $EFI_DIR/bootx64.efi
       mv $EFI_DIR/grub-usb-vm.cfg $EFI_DIR/grub.cfg
       sed -i -e "s;pci=assign-busses;bootmedia=usb pci=use_crs;" $EFI_DIR/grub.cfg
@@ -260,31 +268,6 @@ if [ -e $2 ]; then
       rm -rf $NEW_ZIP_DIR
       # Indicate zip file name
       echo "Zip file created - $ZIP_FILE"
-
-      #Create Virtual Media bootable image for DCC
-      command -v mcopy > /dev/null 2>&1
-      if [ $? -eq 0 ]; then
-          echo "Creating DDC Virtual media boot image"
-          IMG_NAME=$cur_dir/$PLAT-boot-DDC.iso
-          
-          iso_size=$(du -sB 4M $ISO_FILE | awk '{printf "%d", $1}')
-            
-          let image_size=$iso_size+1
-
-          dd if=/dev/zero of=$IMG_NAME bs=4M count=$image_size > /dev/null 2>&1
-          
-          mkfs.vfat -F 32 $IMG_NAME > /dev/null 2>&1
-
-          recursive_mcopy $STG_DIR $IMG_NAME
-          if [ $MCOPY_ERR -eq 1 ]; then
-              echo "Failed to create boot image"
-              rm $IMG_NAME
-          else
-              echo "Created $IMG_NAME"
-          fi
-      else
-          echo "Missing mcopy binaries. Skipping DDC boot image creation."
-      fi
   fi    
 
 

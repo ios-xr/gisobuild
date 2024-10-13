@@ -1,2 +1,7 @@
 ncs5500: "create_usb_zip"
 ncs540: "create_usb_zip"
+ncs1004: "create_usb_zip"
+ncs1k: "create_usb_zip"
+asr9k: "create_usb_zip"
+ncs560: "create_usb_zip"
+iosxrwbd: "create_usb_zip"

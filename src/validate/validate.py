@@ -913,24 +913,6 @@ def _check_type(
         return _check_type_internal(name, value, expected_type, ctx)
 
 
-def _type_can_be_none(type_: Type[Any]) -> bool:
-    """
-    Check if a type can have the value None.
-
-    """
-    if type_ is Any:
-        return True
-
-    if type_ is type(None):
-        return True
-
-    origin = get_origin(type_)
-    if origin is Union:
-        return any(_type_can_be_none(sub_type) for sub_type in get_args(type_))
-
-    return False
-
-
 def _field_can_be_missing(field: "dataclasses.Field[Any]") -> bool:
     """
     Check if a dataclass field is allowed to be missing from the input.

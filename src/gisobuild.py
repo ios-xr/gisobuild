@@ -31,16 +31,11 @@ import pathlib
 import re
 from typing import Any, Dict, Set, Tuple
 
-from utils import gisoutils
-from utils.gisoglobals import *
+from utils import bes, gisoglobals, gisoutils
 
-try:
-    sys.path.append(str(pathlib.Path(__file__).resolve().parents[2]))
-    import exr
-
-    OPTIMIZE_CAPABLE = True
-except ImportError:
-    OPTIMIZE_CAPABLE = False
+OPTIMIZE_CAPABLE = (
+    pathlib.Path(__file__).resolve().parents[2] / "exr"
+).is_dir()
 
 cwd = os.getcwd()
 __version__ = "1.0"
@@ -75,6 +70,7 @@ class InvalidPkgListPkgError(Exception):
 
 
 def parsecli() -> Tuple[argparse.Namespace, argparse.ArgumentParser]:
+    """Parse CLI options."""
     parser = argparse.ArgumentParser(
         description="Utility to build Golden ISO for IOS-XR.",
     )
@@ -196,7 +192,24 @@ def parsecli() -> Tuple[argparse.Namespace, argparse.ArgumentParser]:
         "customer and partner RPMs.",
     )
 
-    """ EXR GISO build options."""
+    parser.add_argument(
+        "--docker",
+        "--use-container",
+        dest="docker",
+        action="store_true",
+        default=False,
+        help="Build GISO in container environment."
+        "Pulls and run pre-built container image to build GISO. ",
+    )
+
+    parser.add_argument(
+        "--bes-logging",
+        action="store_true",
+        default=False,
+        help="Output build environment security logs to console",
+    )
+
+    # EXR GISO build options.
     exrgroup = parser.add_argument_group("EXR only build options")
 
     exrgroup.add_argument(
@@ -213,16 +226,6 @@ def parsecli() -> Tuple[argparse.Namespace, argparse.ArgumentParser]:
         action="store_true",
         default=False,
         help=argparse.SUPPRESS,
-    )
-
-    parser.add_argument(
-        "--docker",
-        "--use-container",
-        dest="docker",
-        action="store_true",
-        default=False,
-        help="Build GISO in container environment."
-        "Pulls and run pre-built container image to build GISO. ",
     )
 
     exrgroup.add_argument(
@@ -259,7 +262,7 @@ def parsecli() -> Tuple[argparse.Namespace, argparse.ArgumentParser]:
             help="To build full iso only for xrv9k",
         )
 
-    """ LNT GISO build options."""
+    # LNT GISO build options.
     lntgroup = parser.add_argument_group("LNT only build options")
 
     lntgroup.add_argument(
@@ -359,7 +362,7 @@ def parsecli() -> Tuple[argparse.Namespace, argparse.ArgumentParser]:
         help=(
             "Do not update the build metadata in mdata.json with "
             "the GISO build information"
-        )
+        ),
     )
 
     version_string = "%%(prog)s (version %s)" % (__version__)
@@ -381,26 +384,26 @@ def validate_and_setup_args(args: argparse.Namespace) -> argparse.Namespace:
     if not args.iso:
         raise AssertionError("Please provide an input ISO")
 
-    """ Check input ISO. """
+    # Check input ISO.
     if not os.path.isfile(args.iso):
         raise AssertionError("Bundle ISO {} does not exist.".format(args.iso))
     filetype = gisoutils.get_file_type(args.iso)
     args.iso = os.path.abspath(args.iso)
-    if filetype not in {FILE_TYPE_ISO, FILE_TYPE_UDF}:
+    if filetype not in {gisoglobals.FILE_TYPE_ISO, gisoglobals.FILE_TYPE_UDF}:
         raise AssertionError(
             "Bundle ISO {} is not an ISO or UDF file.".format(args.iso)
         )
 
-    """ Check if iso provided has exr platform name """
+    # Check if iso provided has exr platform name
     args.exriso = gisoutils.is_platform_exr(args.iso)
 
-    """ Check if input iso is a GISO, we are trying to extend. """
+    # Check if input iso is a GISO, we are trying to extend.
     if re.match(".*golden.*", str(args.iso)):
         args.gisoExtend = True
     else:
         args.gisoExtend = False
 
-    """ Check if optimized or a full iso build is being triggered. """
+    # Check if optimized or a full iso build is being triggered.
     if hasattr(args, "optimize") or hasattr(args, "fullISO"):
         if args.optimize or args.fullISO:
             display_string = "Optimized" if args.optimize else "Full ISO"
@@ -409,7 +412,7 @@ def validate_and_setup_args(args: argparse.Namespace) -> argparse.Namespace:
                     f"{display_string} build workflow is not supported."
                 )
 
-    """ Check repo given in input. """
+    # Check repo given in input.
     if args.repo:
         for repopath in args.repo:
             if repopath and not os.path.exists(repopath):
@@ -434,7 +437,7 @@ def validate_and_setup_args(args: argparse.Namespace) -> argparse.Namespace:
     if bad_pkglist_pkgs:
         raise InvalidPkgListPkgError(bad_pkglist_pkgs)
 
-    """ Check xr config file if provided. """
+    # Check xr config file if provided.
     if args.xrconfig:
         if not os.path.isfile(args.xrconfig):
             raise AssertionError(
@@ -442,13 +445,13 @@ def validate_and_setup_args(args: argparse.Namespace) -> argparse.Namespace:
             )
         filetype = gisoutils.get_file_type(args.xrconfig)
         args.xrconfig = os.path.abspath(args.xrconfig)
-        if filetype != FILE_TYPE_TEXT:
+        if filetype != gisoglobals.FILE_TYPE_TEXT:
             raise AssertionError(
                 "XR Config file {} "
                 "has an invalid file type.".format(args.xrconfig)
             )
 
-    """ Check ztp.ini file if provided. """
+    # Check ztp.ini file if provided.
     if args.ztp_ini:
         if not os.path.isfile(args.ztp_ini):
             raise AssertionError(
@@ -456,13 +459,13 @@ def validate_and_setup_args(args: argparse.Namespace) -> argparse.Namespace:
             )
         filetype = gisoutils.get_file_type(args.ztp_ini)
         args.ztp_ini = os.path.abspath(args.ztp_ini)
-        if filetype != FILE_TYPE_TEXT:
+        if filetype != gisoglobals.FILE_TYPE_TEXT:
             raise AssertionError(
                 "ZTP ini file {} "
                 "has an invalid file type.".format(args.ztp_ini)
             )
 
-    """ Check init script if provided. """
+    # Check init script if provided.
     if args.script:
         if not os.path.isfile(args.script):
             raise AssertionError(
@@ -470,13 +473,13 @@ def validate_and_setup_args(args: argparse.Namespace) -> argparse.Namespace:
             )
         filetype = gisoutils.get_file_type(args.script)
         args.script = os.path.abspath(args.script)
-        if filetype != FILE_TYPE_TEXT:
+        if filetype != gisoglobals.FILE_TYPE_TEXT:
             raise AssertionError(
                 "Init script {} "
                 "has an invalid file type.".format(args.script)
             )
 
-    """ Check input label if provided. """
+    # Check input label if provided.
     if args.no_label:
         logger.info("Info: User has requested a Golden ISO with no label")
         args.label = None
@@ -489,15 +492,16 @@ def validate_and_setup_args(args: argparse.Namespace) -> argparse.Namespace:
         new_label = args.label.replace("_", "")
         if not new_label.isalnum():
             logger.error(
-                "Error: label {} contains characters other than "
-                "alphanumeric and underscore".format(args.label)
+                "Error: label %s contains characters other than "
+                "alphanumeric and underscore",
+                str(args.label),
             )
             raise AssertionError(
                 "Error: label {} contains characters other than "
-                "alphanumeric and underscore".format(args.label)
+                "alphanumeric and underscore".format(str(args.label))
             )
 
-    """ Check that remove_packages doesn't have an RPM file extension. """
+    # Check that remove_packages doesn't have an RPM file extension.
     # In theory, this should check that the specified item is a proper block;
     # but for now just check the the user hasn't specified an RPM (they might
     # still specify with a version/architecture/etc, but we'll flag up
@@ -511,7 +515,7 @@ def validate_and_setup_args(args: argparse.Namespace) -> argparse.Namespace:
                 "are RPM file names: {}".format(" ".join(rpm_suffix))
             )
 
-    """ Check key packages if provided. """
+    # Check key packages if provided.
     if args.key_requests:
         missing_key_requests = [
             k for k in args.key_requests if not os.path.exists(k)
@@ -530,7 +534,7 @@ def main() -> None:
     cli_args, parser = parsecli()
     transform_dict: Dict[str, Any] = {}
 
-    """ If yaml file is provided at input, validate and populate cli_args """
+    # If yaml file is provided at input, validate and populate cli_args
     if cli_args.cli_yaml:
         yaml_args = gisoutils.load_yaml_giso_arguments(cli_args.cli_yaml)
         yaml_args.update(
@@ -541,13 +545,33 @@ def main() -> None:
             }
         )
         cli_args.__dict__.update(yaml_args)
+    else:
+        yaml_args = {}
     if not cli_args.out_directory:
         cli_args.out_directory = DFLT_OUTPUT_DIR
 
-    """ Setup the tool arguments. """
+    # Setup the tool arguments.
     cli_args = validate_and_setup_args(cli_args)
 
-    """ Set up the build env """
+    if cli_args.bes_logging:
+        bes.enable_logging()
+    bes.log_os_release()
+    bes.log_cmd_call(cli_args, yaml_args)
+    # The container tools must be logged separately, as the other required
+    # tools in requirements.yaml relate to the build environment inside the
+    # container.
+    if cli_args.docker:
+        bes.log_tools(("docker", "podman"), "container tools")
+
+    # Remove any environment variables that have not been explicitly listed as
+    # dependencies of gisobuild to prevent any unexpected behavior.
+    if not cli_args.exriso:
+        gisoutils.sanitize_env_vars(gisoglobals.LNT_ENV_VARS)
+        bes.log_env_vars(gisoglobals.LNT_ENV_VARS)
+    if cli_args.exriso:
+        gisoutils.sanitize_env_vars(gisoglobals.EXR_ENV_VARS)
+        bes.log_env_vars(gisoglobals.EXR_ENV_VARS)
+    # Set up the build env
     try:
         gisoutils.create_working_dir(
             cli_args.clean, cli_args.out_directory, MODULE_NAME,
@@ -562,54 +586,26 @@ def main() -> None:
         )
         print(str(error))
         sys.exit(-1)
-    except FileExistsError as e:
-        print(
-            "Output directory {} exists. \n"
-            "Consider passing --clean "
-            "as input or remove directory and rerun.".format(
-                cli_args.out_directory
-            )
-        )
-        sys.exit(-1)
-    except PermissionError as e:
-        print(
-            "Output directory {} exists. \n"
-            "Unable to do output directory cleanup ".format(
-                cli_args.out_directory
-            )
-        )
-        print(e)
-        sys.exit(-1)
-    except OSError as e:
-        print(
-            "Output directory {} exists. \n"
-            "Consider passing --clean "
-            "as input or remove directory and rerun.".format(
-                cli_args.out_directory
-            )
-        )
-        print(e)
-        sys.exit(-1)
     except Exception as e:
         print(e)
         sys.exit(-1)
 
-    """ Console logging to inherit legacy eXR gisobuild logger attributes. """
+    # Console logging to inherit legacy eXR gisobuild logger attributes.
     if cli_args.docker or cli_args.exriso:
         gisoutils.initialize_console_logging()
 
-    """ Transform the parameters as expected by eXR and LNT tools. """
+    # Transform the parameters as expected by eXR and LNT tools.
     if cli_args.docker:
         from utils.gisocontainer import execute_build
 
     elif cli_args.exriso:
         from exrmod.isotools_exr import execute_build
 
-        transform_dict = EXR_CLI_DICT_MAP
+        transform_dict = gisoglobals.EXR_CLI_DICT_MAP
     else:
         from lnt.launcher import execute_build  # type: ignore
 
-        transform_dict = LNT_CLI_DICT_MAP
+        transform_dict = gisoglobals.LNT_CLI_DICT_MAP
 
     try:
         if transform_dict:
@@ -620,7 +616,7 @@ def main() -> None:
                 if transform_dict.get(k) is not None
             }
     except KeyError as e:
-        logger.error("Option {} in input not supported".format(e.args))
+        logger.error("Option %s in input not supported", str(e.args))
         sys.exit(-1)
     execute_build(cli_args)
 

@@ -33,7 +33,7 @@ import subprocess
 import sys
 import tempfile
 from logging import handlers
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Set, Tuple
 
 from . import lnt_gisoglobals as gisoglobals
 
@@ -506,7 +506,7 @@ def _check_signature_digest(
         cert,
         cert_name,
         "digest",
-        "/usr/bin/openssl dgst -sha512 -verify {cert_file}"
+        "openssl dgst -sha512 -verify {cert_file}"
         " -signature {sig_file} {base_file}",
         "Verified OK",
     )
@@ -769,17 +769,19 @@ def get_image_script(iso_script: str) -> str:
         return iso_script
 
 
-def set_user_specified_tools(args: argparse.Namespace) -> None:
+def set_user_specified_tools(args: argparse.Namespace) -> Set[str]:
     """Update the tools depending on whether the user has specified them."""
     global _isoinfo
     global _image_script
+    user_tools = set()
 
     if args.isoinfo:
         _isoinfo = args.isoinfo
         _log.info(
-            "User has specified to use the following isoinfo exectuable: %s",
+            "User has specified to use the following isoinfo executable: %s",
             _isoinfo,
         )
+        user_tools.add(args.isoinfo)
 
     if args.image_script:
         _image_script = args.image_script
@@ -787,6 +789,9 @@ def set_user_specified_tools(args: argparse.Namespace) -> None:
             "User has specified to use the following image.py script: %s",
             _image_script,
         )
+        user_tools.add(args.image_script)
+
+    return user_tools
 
 
 def add_wrappers_to_path() -> None:

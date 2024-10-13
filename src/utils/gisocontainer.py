@@ -40,9 +40,9 @@ import types
 import typing
 from typing import Dict, Iterator, List, NoReturn, Optional, Tuple
 
-from . import _subprocs
+from . import bes
 from . import gisoglobals as gglobals
-from . import gisoutils
+from . import gisoutils, subprocs
 
 # This image version *MUST* be updated whenever the built container changes
 # (e.g. Dockerfile change).
@@ -63,7 +63,7 @@ _CTR_LOG_DIR = gglobals.CTR_LOG_DIR
 
 # incase of eXR gisobuild staging location inside /tmp is failing due to error:
 #   "no space left on device"
-# so instead of using /tmp we are using the user provided staing location.
+# so instead of using /tmp we are using the user provided staging location.
 
 
 def eXR_fix_staging_location(
@@ -98,7 +98,7 @@ def _fatal_error(*msgs: str, prefix: str = "Error: ") -> NoReturn:
 
 
 def _fatal_error_from_subprocess(
-    description: str, error: _subprocs.CalledProcessError
+    description: str, error: subprocs.CalledProcessError
 ) -> NoReturn:
     """
     Exit with an error message derived from a failed subprocess.
@@ -124,13 +124,13 @@ def _system_resource_check() -> None:
     global _containertool
 
     try:
-        _subprocs.execute([_containertool, "info"], verbose_logging=False)
-    except (_subprocs.CalledProcessError, FileNotFoundError):
+        subprocs.execute([_containertool, "info"], verbose_logging=False)
+    except (subprocs.CalledProcessError, FileNotFoundError):
         try:
             # If docker isn't available, try podman
             _containertool = "podman"
-            _subprocs.execute([_containertool, "info"], verbose_logging=False)
-        except (_subprocs.CalledProcessError, FileNotFoundError):
+            subprocs.execute([_containertool, "info"], verbose_logging=False)
+        except (subprocs.CalledProcessError, FileNotFoundError):
             _fatal_error(
                 "Enable docker or podman service to allow container pull and run."
             )
@@ -202,21 +202,11 @@ def _get_volumes_to_mount(args: argparse.Namespace, infile: str) -> List[str]:
     dirname = os.path.dirname(infile)
     vol_map_list.append(os.path.normpath(dirname))
 
-    if args.iso:
-        dirname = os.path.dirname(args.iso)
-        vol_map_list.append(os.path.normpath(dirname))
-
-    if args.repo:
-        for repo in args.repo:
-            vol_map_list.append(os.path.normpath(repo))
-
-    if not args.exriso and args.bridge_fixes:
-        for repo in args.bridge_fixes:
-            vol_map_list.append(os.path.normpath(repo))
-
-    if args.key_requests:
-        for key_request in args.key_requests:
-            vol_map_list.append(os.path.normpath(key_request))
+    vol_map_list.extend(
+        os.path.normpath(f)
+        for f in gisoutils.get_input_files_and_dirs(args)
+        if os.path.exists(f)
+    )
 
     if args.optimize:
         o_path = pathlib.Path(__file__).parents[3] / "exr"
@@ -225,6 +215,12 @@ def _get_volumes_to_mount(args: argparse.Namespace, infile: str) -> List[str]:
         import exr  # pylint: disable=import-error
 
         vol_map_list.extend(exr.VOLUMES)
+
+    for env_var in gglobals.IMAGE_PY_ENV_VARS:
+        if env_var in os.environ:
+            image_py_tool = os.path.abspath(os.environ[env_var])
+            if os.path.exists(image_py_tool):
+                vol_map_list.append(image_py_tool)
 
     return list(set(vol_map_list))
 
@@ -246,7 +242,7 @@ def _stage_artefacts(
     """
     tmp_dir = tempfile.mkdtemp(dir=out_dir)
     try:
-        _subprocs.execute(
+        subprocs.execute(
             [
                 _containertool,
                 "cp",
@@ -255,7 +251,7 @@ def _stage_artefacts(
             ],
             verbose_logging=False,
         )
-    except _subprocs.CalledProcessError as error:
+    except subprocs.CalledProcessError as error:
         raise RuntimeError(
             "Unable to stage container built artefacts."
         ) from error
@@ -272,7 +268,7 @@ def _get_image_tags(desired_name: str) -> Iterator[Tuple[str, str]]:
     including host.
 
     """
-    images = _subprocs.execute(
+    images, _ = subprocs.execute(
         [
             _containertool,
             "images",
@@ -295,8 +291,8 @@ def _pull_image(name: str, tag: str) -> None:
     try:
         giso_pull_cmd = []
         giso_pull_cmd.extend([_containertool, "pull", f"{name}:{tag}"])
-        _subprocs.execute(giso_pull_cmd, verbose_logging=False)
-    except _subprocs.CalledProcessError as error:
+        subprocs.execute(giso_pull_cmd, verbose_logging=False)
+    except subprocs.CalledProcessError as error:
         logger.warning("\nCould not pull published docker image.")
         raise RuntimeError("Can't pull Docker image.") from error
     except Exception as error:
@@ -309,7 +305,7 @@ def _pull_image(name: str, tag: str) -> None:
 def _build_image(name: str, tag: str, context_dir: str) -> None:
     """Build a container image with the given name and tag."""
     try:
-        _subprocs.execute(
+        subprocs.execute(
             [
                 _containertool,
                 "build",
@@ -323,7 +319,7 @@ def _build_image(name: str, tag: str, context_dir: str) -> None:
                 context_dir,
             ]
         )
-    except _subprocs.CalledProcessError as error:
+    except subprocs.CalledProcessError as error:
         _fatal_error_from_subprocess("Container build", error)
 
 
@@ -388,14 +384,14 @@ def _ensure_image() -> str:
             ", ".join(sorted(dead_tags)),
         )
         try:
-            _subprocs.execute(
+            subprocs.execute(
                 [_containertool, "rmi"]
                 + [
                     f"{name}:{tag}" for name, tag in images if tag in dead_tags
                 ],
                 verbose_logging=False,
             )
-        except _subprocs.CalledProcessError:
+        except subprocs.CalledProcessError:
             # Best-effort. Images might be in use.
             pass
 
@@ -409,11 +405,11 @@ def _gen_container_name() -> str:
 
 def _build_giso(
     args: argparse.Namespace, infile: str, container_name: str, image: str
-) -> str:
+) -> Tuple[str, str]:
     """
     Execute the GISO build.
 
-    On success returns stdout from the build.
+    On success returns stdout and stderr from the build.
 
     :param args:
         Parsed CLI args.
@@ -446,17 +442,24 @@ def _build_giso(
             for vol in _get_volumes_to_mount(args, infile)
         )
     )
-    add_exr_env_vars(giso_build_cmd)
+    if args.exriso:
+        giso_build_cmd.extend(get_exr_env_vars())
+    else:
+        giso_build_cmd.extend(get_lnt_env_vars())
     giso_build_cmd.extend(
         [image, "/app/gisobuild/gisobuild.py", "--yamlfile", infile]
     )
     try:
         logger.debug(giso_build_cmd)
-        result = _subprocs.execute(giso_build_cmd, verbose_logging=False)
-    except _subprocs.CalledProcessError as error:
+        stdout, stderr = subprocs.execute(
+            giso_build_cmd, verbose_logging=False
+        )
+    except subprocs.CalledProcessError as error:
+        if args.bes_logging:
+            bes.enable_logging()
+            bes.log("GISO Build Failed")
         _fatal_error_from_subprocess("GISO build", error)
-
-    return result
+    return stdout, stderr
 
 
 def _canonical_path(path: Optional[str]) -> Optional[pathlib.Path]:
@@ -505,20 +508,25 @@ def _main(
     is_exrbuild: bool = args.exriso
     args.__dict__ = gisoutils.load_yaml_giso_arguments(infile)
     args.__dict__["exriso"] = is_exrbuild
-    logger.info("\nRunning GISO build...")
-    output = _build_giso(args, infile, container_name, image)
-    # debug until we see 'System req...' and once we see that line,
+    stdout, stderr = _build_giso(args, infile, container_name, image)
+    # For eXR, debug until we see 'System req...' and once we see that line,
     # we print all subsequent lines to the console. This is done to avoid
     # printing unnecessary info to the console.
-    printToConsole: bool = False
-    for line in output.splitlines():
+    print_to_console: bool = not is_exrbuild
+    for line in stdout.splitlines():
         if "System requirements check" in line:
-            printToConsole = True
+            print_to_console = True
         if line:
-            if printToConsole:
+            if print_to_console:
                 logger.info(line)
             else:
                 logger.debug(line)
+
+    # Print the stderr to the console when BES logging is enabled. This
+    # includes any errors raised by gisobuild and the build environment logs.
+    # All other logs are redirected to stdout for containerized builds.
+    if args.bes_logging and stderr:
+        print(stderr, file=sys.stderr)
 
 
 def _execute_build(cli_args: argparse.Namespace) -> None:
@@ -551,6 +559,7 @@ def _execute_build(cli_args: argparse.Namespace) -> None:
     container_name = _gen_container_name()
     try:
         container.setup_copy_out_directory(cli_args)
+        logger.info("\nRunning GISO build...")
         gisoutils.display_progress()
         system_build_main(container_name, cli_args, infile, image)
     except Exception:
@@ -562,13 +571,13 @@ def _execute_build(cli_args: argparse.Namespace) -> None:
         try:
             if not cli_args.optimize:
                 img_dir = _stage_artefacts(out_dir, container_name)
-                _subprocs.execute(
+                subprocs.execute(
                     [_containertool, "rm", "-f", container_name],
                     verbose_logging=False,
                 )
         except RuntimeError:
             _fatal_error("GISO build failed. Nothing to stage.")
-        except _subprocs.CalledProcessError:
+        except subprocs.CalledProcessError:
             pass
 
     try:
@@ -590,7 +599,7 @@ def execute_build(args: argparse.Namespace) -> None:
     """Execute build and handle exceptions."""
     try:
         _execute_build(args)
-    except _subprocs.CalledProcessError as exc:
+    except subprocs.CalledProcessError as exc:
         # Will have already done detailed logging in our subprocess.run
         # wrapper.
         logger.exception("Exiting with an unhandled subprocess error:")
@@ -643,19 +652,29 @@ def _get_env_vars() -> Dict[str, str]:
     return exr.ENV_VARS
 
 
-def add_exr_env_vars(gbuild_cmd: List[str]) -> None:
+def get_exr_env_vars() -> List[str]:
     """
-        pass eXR spececific env variables to gisocontainer.
-        if the path is not accesible inside the container, mount the path at
-        appropriate location
-    """
+    Container CLI arguments for Lindt specific env variables.
 
+    If the path is not accesible inside the container, mount the path at
+    appropriate location.
+    """
+    extra_args = []
     if "MATRIX_INFO_PATH" in os.environ:
         mtrix_file = pathlib.Path(str(os.environ["MATRIX_INFO_PATH"]))
         logger.info("Using custom compatibility matrix: %s", mtrix_file)
-        gbuild_cmd.extend(
+        extra_args.extend(
             ["-v", f"{mtrix_file}:/app/matrix_info_path/upgrade_matrix/:ro"]
         )
-        gbuild_cmd.extend(
+        extra_args.extend(
             ["-e", "MATRIX_INFO_PATH=/app/matrix_info_path/upgrade_matrix/"]
         )
+    return extra_args
+
+
+def get_lnt_env_vars() -> List[str]:
+    """Container CLI arguments for Lindt specific env variables."""
+    extra_args = []
+    for env_var in gglobals.LNT_ENV_VARS:
+        extra_args.extend(["-e", env_var])
+    return extra_args
