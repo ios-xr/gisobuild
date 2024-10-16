@@ -35,7 +35,7 @@ import yaml
 import string
 import stat
 import pprint
-from utils import gisoutils
+from utils import gisoutils, bes
 import pathlib
 from typing import List
 
@@ -506,6 +506,7 @@ class Rpmdb:
     tmp_smu_tar_extract_path = ""
 
     def __init__(self):
+        self.rpmdb_version = None 
         self.bundle_iso = Iso()
         self.repo_path = []
         self.rpm_list = []
@@ -800,6 +801,17 @@ class Rpmdb:
                     self.rpm_list.append(rpm)
                     rpm_name_version_release_arch_list.\
                         append(rpm_name_ver_rel_arch)
+                tmp_iso_version = iso_version.replace('.', "")
+                tmp_iso_version = "r" + tmp_iso_version
+                if (self.rpmdb_version == None and tmp_iso_version == rpm.release):
+                    cmd = "rpm -qp --qf {} {}".format("\'[%{GROUP}\\n]\'", file_name)  
+                    res = run_cmd(cmd)
+                    if "Suppcards" in res:
+                        self.rpmdb_version = "OE"
+                    else:    
+                        self.rpmdb_version = "WRL7"
+
+
             if re.match(".*SERVICEPACK.*", result["output"]):
                 sp_basename = os.path.basename(file_name) 
                 if platform in sp_basename.split('-')[0]:
@@ -2940,6 +2952,7 @@ class Giso:
         rpm_count = 0
         repo = ""
         self.giso_dir = "%s/giso_files_dir" % pwd
+        self.rpmdb_version = rpm_db.rpmdb_version
         if os.path.exists(self.giso_dir):
             shutil.rmtree(self.giso_dir)
         os.chdir(pwd)
@@ -3228,6 +3241,10 @@ class Giso:
                                 isorel = self.bundle_iso.get_iso_version(),
                                 rel = ' '.join(args.bridge_fixes)
                           )
+                    if args.bes_logging:
+                        bes.enable_logging()
+                        bes.log("Bridge SMU build command: %s", cmd)
+
                     logger.debug ("Command to package bridge SMUs:\n{}".format (cmd))
                     logger.info ("\nPackaging bridge SMUs with input:\n\t {}".format (
                                   '\n\t '.join(args.bridge_fixes)))
@@ -3274,19 +3291,19 @@ class Giso:
                     self.recreate_initrd_non_nested_platform()
                 self.update_signature(self.giso_dir)
                 if os.path.exists(self.giso_dir+"/boot/grub/stage2_eltorito"):
-                    cmd = "mkisofs -R -b boot/grub/stage2_eltorito -no-emul-boot -input-charset utf-8 \
+                    cmd = "mkisofs -R -uid 0 -gid 0 -b boot/grub/stage2_eltorito -no-emul-boot -input-charset utf-8 \
                         -boot-load-size 4 -boot-info-table -o %s %s" % (self.giso_name, self.giso_dir)
                 else:
-                    cmd = "mkisofs -R -o %s %s" % (self.giso_name, self.giso_dir)
+                    cmd = "mkisofs -R -uid 0 -gid 0 -o %s %s" % (self.giso_name, self.giso_dir)
                 run_cmd(cmd)
 
             else:
                 if os.path.exists(self.giso_dir+"/boot/grub/stage2_eltorito"):
-                    cmd = "mkisofs -R -b boot/grub/stage2_eltorito -no-emul-boot -input-charset utf-8 \
+                    cmd = "mkisofs -R -uid 0 -gid 0 -b boot/grub/stage2_eltorito -no-emul-boot -input-charset utf-8 \
                             -boot-load-size 4 -boot-info-table -o %s %s" \
                             % (self.giso_name, self.giso_dir)
                 else :
-                    cmd = "mkisofs -R -o %s %s" % (self.giso_name, self.giso_dir)
+                    cmd = "mkisofs -R -uid 0 -gid 0 -o %s %s" % (self.giso_name, self.giso_dir)
                 run_cmd(cmd)
         return 0
             
@@ -3335,10 +3352,10 @@ class Giso:
 
             # Recreate system_image.iso
             if os.path.exists(self.system_image_extract_path+"/boot/grub/stage2_eltorito"):
-                cmd = "mkisofs -R -b boot/grub/stage2_eltorito -no-emul-boot -boot-load-size 4 \
+                cmd = "mkisofs -R -uid 0 -gid 0 -b boot/grub/stage2_eltorito -no-emul-boot -boot-load-size 4 \
                        -boot-info-table -o new_system_image.iso %s"%(self.system_image_extract_path)
             else:
-                cmd = "mkisofs -R -o new_system_image.iso %s"%(self.system_image_extract_path)
+                cmd = "mkisofs -R -uid 0 -gid 0 -o new_system_image.iso %s"%(self.system_image_extract_path)
 
             run_cmd(cmd)
 
@@ -3419,10 +3436,10 @@ class Giso:
 
         # Recreate system_image.iso
         if os.path.exists(extract_system_image_initrd_path+"/boot/grub/stage2_eltorito"):
-            cmd = "mkisofs -R -b boot/grub/stage2_eltorito -no-emul-boot -boot-load-size 4 \
+            cmd = "mkisofs -R -uid 0 -gid 0 -b boot/grub/stage2_eltorito -no-emul-boot -boot-load-size 4 \
                        -boot-info-table -o new_system_image.iso %s"%(extract_system_image_initrd_path)
         else:
-            cmd = "mkisofs -R -o new_system_image.iso %s"%(extract_system_image_initrd_path)
+            cmd = "mkisofs -R -uid 0 -gid 0 -o new_system_image.iso %s"%(extract_system_image_initrd_path)
 
         run_cmd(cmd) 
         run_cmd("mv new_system_image.iso %s"%(self.system_image))
@@ -3543,10 +3560,20 @@ class Giso:
         if self.platform == "ncs1004":
             SIGNING_CMD = "%s -plat %s -file %s/boot/initrd.img  -dir %s -signature %s/boot/signature.initrd.img"% \
                 (XR_SIGN,"ncs1k", path, path, path)
+ 
+        elif self.platform == "xrv9k" and self.rpmdb_version == "OE":
+            # With the migration from WRL7 to OE, XRV9K started using LNT keys,
+            # instead of conventional eXR keys to sign the initrd. This change
+            # should ideally be taken care of in code-sign / xr-sign toolkit.
+            # A bug has been raise to track this change but in the meanwhile,
+            # will use Cisco 8000 (LNT) keys to do the signing.
+            # TODO: remove this check after changes are in place in the signing tool.
+            SIGNING_CMD = "%s -plat %s -file %s/boot/initrd.img  -dir %s -signature %s/boot/signature.initrd.img"% \
+                (XR_SIGN,"8000", path, path, path)
         else:
             SIGNING_CMD = "%s -plat %s -file %s/boot/initrd.img  -dir %s -signature %s/boot/signature.initrd.img"% \
                 (XR_SIGN,self.platform, path, path, path)
-        logger.debug("\nenviron before signing is {}".format(os.environ))
+        logger.debug("\nenviron before signing is {}".format(exr_int.ENV_VARS))
         result = run_cmd(SIGNING_CMD)                                                
         logger.debug("\nOutput of {} is \n {}".format(SIGNING_CMD, result["output"]))
 

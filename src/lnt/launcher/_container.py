@@ -89,15 +89,6 @@ def system_resource_prep(args: argparse.Namespace) -> str:
         f.write(json.dumps(buildinfo_mdata))
     args_dict["buildinfo"] = mdata_file
 
-    # Copy the giso config, ztp.ini and image.py script to temp staging
-    copy_file_args = ["xrconfig", "ztp_ini", "image_script"]
-    for copy_file_arg in copy_file_args:
-        if args_dict[copy_file_arg]:
-            shutil.copy(args_dict[copy_file_arg], tempdir)
-            args_dict[copy_file_arg] = os.path.join(
-                tempdir, os.path.basename(args_dict[copy_file_arg])
-            )
-
     # Make necessary changes to yaml file to be passed
     gisoutils.dump_yaml_giso_arguments(cliConfig_file, args_dict)
 

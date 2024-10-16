@@ -18,6 +18,7 @@ or implied.
 
 """
 
+import argparse
 import datetime
 import hashlib
 import json
@@ -31,11 +32,11 @@ import time
 from logging import handlers
 from pathlib import Path
 from tarfile import TarFile
-from typing import Any, Dict, Iterable, List, Tuple, Union
+from typing import Any, Dict, Iterable, List, Set, Tuple, Union
 
 from lnt import lnt_gisoglobals
 
-from . import _subprocs, gisoglobals
+from . import gisoglobals, subprocs
 
 logger = logging.getLogger(__name__)
 e = threading.Event()
@@ -137,7 +138,7 @@ def get_file_type(filename: str) -> str:
     if not os.path.exists(filename):
         raise AssertionError("{} does not exist.".format(filename))
     cmd = "file -L {}".format(filename)
-    output = _subprocs.execute(cmd.split())
+    output, _ = subprocs.execute(cmd.split())
     file_att = output.split(":")[1].strip()
     return match_file_type(file_att)
 
@@ -172,9 +173,9 @@ def is_platform_exr(iso: str) -> bool:
 
     is_exr = False
     try:
-        files_top = _subprocs.execute(
-            ["isoinfo", "-i", iso, "-R", "-f"]
-        ).splitlines()
+        files_top = subprocs.execute(["isoinfo", "-i", iso, "-R", "-f"])[
+            0
+        ].splitlines()
         if "/iso_info.txt" in files_top:
             is_exr = True
         elif "/" + str(lnt_gisoglobals.LNT_MDATA_PATH) in files_top:
@@ -329,3 +330,29 @@ def tar_extract_all(tar: TarFile, path: Path) -> None:
             )
 
     tar.extractall(path)
+
+
+def sanitize_env_vars(required_env_vars: Set[str]) -> None:
+    """Ensure that only listed env var dependencies are set."""
+    preserved_env_vars = required_env_vars | gisoglobals.REQUIRED_ENV_VARS
+    for env_var in os.environ.copy():
+        if env_var not in preserved_env_vars:
+            os.environ.pop(env_var)
+
+
+def get_input_files_and_dirs(args: argparse.Namespace) -> List[str]:
+    """Return the input files and directories in the parsed CLI arguments."""
+    file_or_dir_args = list(gisoglobals.INPUT_FILE_DIR_ARGS_CMN)
+    if args.exriso:
+        file_or_dir_args.extend(gisoglobals.INPUT_FILE_DIR_ARGS_EXR)
+    else:
+        file_or_dir_args.extend(gisoglobals.INPUT_FILE_DIR_ARGS_LNT)
+
+    input_files_and_dirs: List[str] = []
+    for file_or_dir_arg in file_or_dir_args:
+        value = getattr(args, file_or_dir_arg, None)
+        if isinstance(value, list):
+            input_files_and_dirs.extend([os.path.abspath(f) for f in value])
+        elif value:
+            input_files_and_dirs.append(os.path.abspath(value))
+    return input_files_and_dirs

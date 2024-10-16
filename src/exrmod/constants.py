@@ -1,8 +1,6 @@
-# -----------------------------------------------------------------------------
+""" Constants specific to eXR GISOBuild only
 
-""" Wrapper to launch the GISO build either natively or in a container.
-
-Copyright (c) 2022-2023 Cisco and/or its affiliates.
+Copyright (c) 2022 Cisco and/or its affiliates.
 This software is licensed to you under the terms of the Cisco Sample
 Code License, Version 1.1 (the "License"). You may obtain a copy of the
 License at
@@ -18,21 +16,10 @@ or implied.
 
 """
 
-__all__ = ("launch_build",)
+GISOBUILD_PREREQ_EXECUTABLES = [
+    'mount', 'rm', 'cp', 'umount', 'zcat', 'chroot', 'mkisofs'
+]
 
-
-import argparse
-import logging
-
-from .. import gisoutils
-
-logger = logging.getLogger("gisobuild")
-
-
-def launch_build(cli_args: argparse.Namespace) -> None:
-    """Launch the GISO build."""
-    from .. import builder
-
-    gisoutils.add_wrappers_to_path()
-
-    builder.run(cli_args)
+GISOBUILD_PREREQ_PYTHONMODULES = [
+    "yaml"
+]

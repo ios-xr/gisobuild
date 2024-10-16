@@ -27,7 +27,7 @@ import subprocess
 # Re-export this so that users don't have to import subprocess as well as out
 # aim is to wrap it.
 from subprocess import CalledProcessError
-from typing import Sequence
+from typing import Sequence, Tuple
 
 _logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ def _execute_internal(
     *,
     combined_stdout: bool = True,
     verbose_logging: bool = True
-) -> str:
+) -> Tuple[str, str]:
     """
     Internal function to execute a subprocess with sensible options.
 
@@ -53,7 +53,7 @@ def _execute_internal(
         run and successful output.
 
     :return:
-        The stdout of the subprocess.
+        The stdout and stderr of the subprocess.
 
     """
     stdout = subprocess.PIPE
@@ -83,12 +83,14 @@ def _execute_internal(
         if verbose_logging:
             _logger.debug("Command successful.")
             for line in proc.stdout.splitlines():
-                _logger.debug("stdout: %s", line)
+                _logger.info("stdout: %s", line)
 
-    return proc.stdout
+    return proc.stdout, proc.stderr
 
 
-def execute(cmd: Sequence[str], verbose_logging: bool = True) -> str:
+def execute(
+    cmd: Sequence[str], verbose_logging: bool = True
+) -> Tuple[str, str]:
     """
     Run the command as a subprocess capturing the output and adding logs.
 
@@ -100,7 +102,7 @@ def execute(cmd: Sequence[str], verbose_logging: bool = True) -> str:
         run and successful output.
 
     :return:
-        The stdout from the command if successful.
+        The stderr and stdout from the command if successful.
 
     """
     return _execute_internal(
@@ -126,4 +128,4 @@ def execute_combined_stdout(
     """
     return _execute_internal(
         cmd, combined_stdout=True, verbose_logging=verbose_logging
-    )
+    )[0]

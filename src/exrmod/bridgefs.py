@@ -82,7 +82,7 @@ class BridgeRpmDB:
             os.chmod (os.path.join(self.fsroot, 
                             os.path.basename(rpmfile)), 0o644)
             try:
-                rpmrel = gu.run_cmd ("chroot {} rpm -qp --qf {} {}"
+                rpmrel = gb.run_cmd ("chroot {} rpm -qp --qf {} {}"
                                 .format(self.fsroot, "\'%{XRRELEASE}\'", 
                                 os.path.basename(rpmfile)))
                 rpmrel = "r{}".format (rpmrel)

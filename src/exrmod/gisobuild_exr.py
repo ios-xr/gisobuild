@@ -21,6 +21,7 @@ or implied.
 from exrmod.gisobuild_exr_engine import *
 from utils import gisoutils
 from utils import gisoglobals as gglobals
+from .constants import GISOBUILD_PREREQ_EXECUTABLES, GISOBUILD_PREREQ_PYTHONMODULES
 import hashlib
 import json
 import os
@@ -30,6 +31,9 @@ import subprocess
 import pathlib
 import yaml
 import glob
+import importlib
+sys.path.append(str(pathlib.Path(__file__).parents[1] / "utils"))
+import bes
 
 cwd = os.getcwd()
 MODULE_NAME = os.path.basename(__file__).split(".")[0]
@@ -55,7 +59,7 @@ def system_resource_check (args):
     from distutils.spawn import find_executable
     tools_check_err = False
     import_errors = False
-    tools = ['mount', 'rm', 'cp', 'umount', 'zcat', 'chroot', 'mkisofs']
+    tools = GISOBUILD_PREREQ_EXECUTABLES
 
     if hasattr(args, 'fullISO') and args.fullISO:
         tools.remove('chroot')
@@ -93,7 +97,8 @@ def system_resource_check (args):
 
     ''' TODO: Any specific imports we need to take care of here? '''
     try:
-        import yaml
+        for mod in GISOBUILD_PREREQ_PYTHONMODULES:
+            importlib.import_module(mod)
     except:
         import_errors = True
         logger.error("Failed to import all pre-req modules.")
@@ -125,8 +130,12 @@ def create_usb_zip(giso_path:str, platform:str):
         raise USBZipFailure( 1, f"USB_Boot_zip creation FAILED: {platform} Platform not supported.")
     zip_script = platform_scripts.parent / supported_platforms[platform]
     try:
-        logger.debug(f"Running: {zip_script} {platform} {giso_path}")
-        op = subprocess.run(f"{zip_script} {platform} {giso_path}",
+        plat = platform
+        if plat == "asr9k":
+            plat = "asr9k-x64"
+        logger.debug(f"Running: {zip_script} {plat} {giso_path}")
+        bes.log(f"USB Zip creation command: {zip_script} {plat} {giso_path}")
+        op = subprocess.run(f"{zip_script} {plat} {giso_path}",
                             shell=True,
                             check=True,
                             stderr=subprocess.PIPE,
@@ -158,7 +167,9 @@ def main (argv, infile):
 
     cwd = os.getcwd()
     global_platform_name = None
-
+    if argv.bes_logging:
+        bes.enable_logging()
+    bes.log_tools(GISOBUILD_PREREQ_EXECUTABLES, "eXR tool prereqs")
     initialize_globals (cwd, argv, logger, global_platform_name)
     pkglist=""
     with Giso() as giso:
@@ -487,7 +498,14 @@ def main (argv, infile):
                 files_to_checksum.add(migtar.dst_system_tar)
         if argv.create_checksum:
             gisoutils.create_checksum_file(giso_dir, files_to_checksum, gglobals.CHECKSUM_FILE_NAME)
-        
+        if argv.bes_logging:
+            if not result:
+                bes.log("GISO build successful")
+                files_to_log = [os.path.join(giso_dir, x) for x in files_to_checksum]
+                files_to_log.append(os.path.join(giso_dir, "checksums.json"))
+                bes.log_files(files_to_log, "output files:")
+            else:
+                bes.log("GISO Build unsuccessful")
         if hasattr(argv, 'optimize') and argv.optimize and argv.in_docker:
             files_to_copy = files_to_checksum.copy()
             files_to_copy.add("checksums.json")

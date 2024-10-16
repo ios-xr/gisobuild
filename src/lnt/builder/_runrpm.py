@@ -37,7 +37,7 @@ import pathlib
 import subprocess
 from typing import Callable, List, Sequence
 
-from . import _subprocs
+from utils import subprocs
 
 _logger = logging.getLogger(__name__)
 
@@ -152,7 +152,7 @@ def _run_rpm(
     """
     cmd = _get_rpm_cmd(args)
     try:
-        out = _subprocs.execute_combined_stdout(cmd, verbose_logging=False)
+        out = subprocs.execute_combined_stdout(cmd, verbose_logging=False)
     except subprocess.CalledProcessError as e:
         raise exc_creator(e) from e
     return out

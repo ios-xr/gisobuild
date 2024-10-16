@@ -48,6 +48,7 @@ from typing import (
     Union,
 )
 
+from utils import bes
 from utils import gisoglobals as gglobals
 from utils import gisoutils as ggisoutils
 
@@ -409,40 +410,16 @@ def _prelim_checks(args: argparse.Namespace) -> None:
         gisoutils.check_copy_dir(args.copy_dir)
 
 
-def _split_list(list_to_parse: List[str]) -> List[str]:
-    """
-    Takes a comma or space separated list string and parse it into a list
-
-    :param list_to_parse:
-        The string which is a comma separated list
-
-    :returns:
-        A list of the parsed items
-
-    """
-
-    return_list: List[str] = []
-    # Arguments can be provided comma or space separated. If they were space
-    # separated argparse will have separated them into a list in which case we
-    # just add them to the list. If they were comma separated then we need to
-    # parse them here.
-    for item in list_to_parse:
-        return_list += item.split(",")
-
-    return return_list
-
-
 def _get_rpms(rpm_type: str, packages: List[str], tmp_dir: str) -> List[str]:
     """
-    Parse the comma separated list of packages. Unpack them if they are
-    compressed.
+    Parse the list of packages. Unpack them if they are compressed.
 
     :param rpm_type:
         String of what type of RPMs that are to be retrieved for logging
         purposes
 
     :param packages:
-        List of RPMS separated by commas in a single string
+        List of RPMS
 
     :param tmp_dir:
         Temporary directory to store intermediate files
@@ -452,15 +429,13 @@ def _get_rpms(rpm_type: str, packages: List[str], tmp_dir: str) -> List[str]:
 
     """
 
-    rpms = _split_list(packages)
-
     rpms_found: List[str] = []
     # Go through the set of listed items: they can either be tgz, tar, rpm
     # files or directories. If it's a tgz or tar file unpacked then add any
     # RPMs in the unpacked directories to the list. If it is a rpm file just
     # append it to the list. If a dir has been specified, search the dir for
     # rpms and follow the same logic.
-    for rpm in rpms:
+    for rpm in packages:
         if not os.path.exists(rpm):
             raise RPMDoesNotExistError(rpm)
 
@@ -470,6 +445,10 @@ def _get_rpms(rpm_type: str, packages: List[str], tmp_dir: str) -> List[str]:
             rpms_found += _file.get_rpms_from_dir(rpm, tmp_dir)
         else:
             raise RPMWrongFormatError(rpm)
+
+    # The input tarballs have been logged earlier. Log the constituent RPMs
+    # here, now they have been unpacked.
+    bes.log_files(rpms_found, f"input {rpm_type} RPMs")
 
     _log.debug(
         "Will attempt to add the following %s RPMs to the ISO: %s",
@@ -604,6 +583,13 @@ def _log_on_success(
         power = int(math.floor(math.log(size_bytes, 1024)))
         divisor = math.pow(1024, power)
         size = round(size_bytes / divisor, 2)
+
+    # Build environment logging
+    output_files = [iso_file]
+    if usb_file is not None:
+        output_files.append(usb_file)
+    bes.log("GISO build successful")
+    bes.log_files(output_files, "output files")
 
     print("gisobuild.py {}".format(arg_string))
     print("GISO build successful")
@@ -1393,13 +1379,12 @@ def run(args: argparse.Namespace) -> int:
     # out YAML file vs CLI or anything at this stage.
     _log.info("Input arguments for build: %s", args)
 
-    gisoutils.set_user_specified_tools(args)
-
     rc = 0
     try:
         iso_file, usb_file = _main(args, log_dir)
         _log_on_success(args, iso_file, usb_file, log_path)
     except Exception as exc:
+        bes.log("Gisobuild failed: %s", str(exc))
         _log.error(
             "Gisobuild script failed, see %s for more info: %s",
             log_path,

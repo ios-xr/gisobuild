@@ -10,8 +10,8 @@ usage: gisobuild.py [-h] [--iso ISO] [--repo REPO [REPO ...]]
                     [--create-checksum] [--yamlfile CLI_YAML] [--clean]
                     [--pkglist PKGLIST [PKGLIST ...]]
                     [--key-requests KEY_REQUESTS [KEY_REQUESTS ...]]
-                    [--script SCRIPT] [--docker] [--x86-only] [--migration]
-                    [--optimize] [--full-iso]
+                    [--docker] [--bes-logging] [--script SCRIPT] [--x86-only]
+                    [--migration] [--optimize] [--full-iso]
                     [--remove-packages REMOVE_PACKAGES [REMOVE_PACKAGES ...]]
                     [--skip-usb-image] [--copy-dir COPY_DIRECTORY]
                     [--clear-bridging-fixes] [--verbose-dep-check] [--debug]
@@ -64,6 +64,7 @@ optional arguments:
   --docker, --use-container
                         Build GISO in container environment.Pulls and run pre-
                         built container image to build GISO.
+  --bes-logging         Output build environment security logs to console
   --version             Print version of this script and exit
 
 EXR only build options:

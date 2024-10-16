@@ -88,6 +88,7 @@ EXR_CLI_DICT_MAP = {
     "migration": "migTar",
     "optimize": "optimize",
     "x86_only": "x86_only",
+    "bes_logging": "bes_logging",
     "docker": "docker",
     "fullISO": "fullISO",
     "gisoExtend": "gisoExtend",
@@ -134,6 +135,7 @@ LNT_CLI_DICT_MAP = {
     "migration": None,
     "optimize": None,
     "x86_only": None,
+    "bes_logging": "bes_logging",
     "docker": "docker",
     "fullISO": None,
     "gisoExtend": None,
@@ -166,3 +168,51 @@ CTR_OUT_DIR = pathlib.Path(
 )
 CTR_LOG_DIR = "logs"
 CTR_ARTIFACT_DIR = "giso"
+
+# Environment variables used by the image.py script.
+IMAGE_PY_ENV_VARS = {
+    "CISCO_IMAGE_PY_ISOINFO",
+    "CISCO_IMAGE_PY_UNSQUASHFS",
+    "CISCO_IMAGE_PY_7Z",
+    "CISCO_IMAGE_PY_CREATEREPO",
+    "CISCO_IMAGE_PY_MKSQUASHFS",
+    "CISCO_IMAGE_PY_MKISOFS",
+}
+# Environment variables used by the Lindt gisobuild.
+LNT_ENV_VARS = IMAGE_PY_ENV_VARS.copy()
+
+# Environment variables used by eXR GISOBuild
+EXR_ENV_VARS = {
+    "JAM_PRODUCTION_IMAGE_BUILD",
+    "SWIMS_TREAT_TICKET_AS_TOKEN",
+    "SWIMS_SESSION_TOKEN",
+    "SWIMS_SKIP_TICKET_CHECK",
+    "SWIMS_TOGGLE_TOKEN",
+    "SWIMS_OVERRIDE_TICKET_CLI_PARAM_WITH_ENV",
+    "PYTHONPATH",
+    "MATRIX_INFO_PATH",
+}
+
+# Environment variables that are always needed and should be preserved when
+# sanitizing the environment.
+REQUIRED_ENV_VARS = {
+    "PATH",
+}
+
+# Names of parsed CLI arguments that correspond to input files and directories
+# (either single entries or lists).
+INPUT_FILE_DIR_ARGS_LNT = (
+    "bridge_fixes",
+    "buildinfo",
+    "image_script",
+    "isoinfo",
+)
+INPUT_FILE_DIR_ARGS_EXR = ()
+INPUT_FILE_DIR_ARGS_CMN = (
+    "cli_yaml",
+    "iso",
+    "key_requests",
+    "repo",
+    "xrconfig",
+    "ztp_ini",
+)

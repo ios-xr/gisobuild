@@ -173,13 +173,15 @@ def _get_minimum_executable_version(
     )
 
 
-def check_requirements() -> List[str]:
+def check_requirements() -> Tuple[List[str], Dict[str, Any]]:
     """
     Try to import each requirement of the giso tool suite, returning any that
     are not available.
 
     :returns:
-        List of missing requirements
+        Tuple containing
+        - List of missing requirements
+        - Dictionary of requirements as loaded from the requirements YAML
 
     """
     missing_deps: List[str] = []
@@ -254,7 +256,7 @@ def check_requirements() -> List[str]:
                 "rpm >= {}.{}".format(min_rpm_major, min_rpm_minor)
             )
 
-    return missing_deps
+    return missing_deps, requirements
 
 
 def main() -> None:
@@ -263,7 +265,7 @@ def main() -> None:
     giso/src/lnt/builder, printing any that are not available
 
     """
-    missing_deps = check_requirements()
+    missing_deps, _ = check_requirements()
     if missing_deps:
         print(", ".join(missing_deps))
 
