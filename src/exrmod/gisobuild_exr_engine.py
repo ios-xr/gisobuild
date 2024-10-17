@@ -574,6 +574,7 @@ class Rpmdb:
 
         for pkg in pkglist:
             for repo in repo_paths:
+                logger.info("\nPkg [%s] Scanning repository [%s]...\n" % (pkg, os.path.abspath(repo)))
                 if re.search('CSC[a-z][a-z]\d{5}', pkg):
 
                     # DDTS ID with tar extension
@@ -705,23 +706,23 @@ class Rpmdb:
 
                 # Presence of "all" in the input parameter
                 elif pkg == "all":
-                    repo_files = []
-                    for repo in repo_paths:
-                        tmp_file_list += glob.glob(repo+"/*")
-                        for el in tmp_file_list:
-                            # DDTS ID with tar extension
-                            if el.endswith('.tar'):
-                                filepath=("%s/%s" %(repo, el))
-                                if os.path.isfile(filepath):
-                                    if not Rpmdb.tmp_smu_tar_extract_path:
-                                        pwd=cwd
-                                        Rpmdb.tmp_smu_tar_extract_path = tempfile.mkdtemp(dir=pwd)
-                                    run_cmd("tar -xf %s -C %s" % (filepath, Rpmdb.tmp_smu_tar_extract_path))
-                                    run_cmd("ls -ltr %s" % (Rpmdb.tmp_smu_tar_extract_path))
-                                    repo_files += glob.glob(Rpmdb.tmp_smu_tar_extract_path+"/*")
-                                    new_repo_paths.append(Rpmdb.tmp_smu_tar_extract_path)
-                            if el.endswith('.rpm') and el not in repo_files:
-                                repo_files.append(el)
+                    for filepath in glob.glob(repo+"/*"):
+                        logger.debug(filepath)
+                        if os.path.isfile(filepath):
+                            # tar extension
+                            if filepath.endswith('.tar'):
+                                if not Rpmdb.tmp_smu_tar_extract_path:
+                                    pwd=cwd
+                                    Rpmdb.tmp_smu_tar_extract_path = tempfile.mkdtemp(dir=pwd)
+                                run_cmd("tar -xf %s -C %s" % (filepath, Rpmdb.tmp_smu_tar_extract_path))
+                                run_cmd("ls -ltr %s" % (Rpmdb.tmp_smu_tar_extract_path))
+                                for _f in glob.glob(Rpmdb.tmp_smu_tar_extract_path+"/*.rpm"):
+                                    if _f not in repo_files:
+                                        repo_files.append(_f)
+                                new_repo_paths.append(Rpmdb.tmp_smu_tar_extract_path)
+                            # rpm extension
+                            if filepath.endswith('.rpm') and filepath not in repo_files:
+                                repo_files.append(filepath)
                 # No presence of DDTS ID in the input parameter e.g opt rpms
                 else:
                     filepath=("%s/%s" %(repo, pkg))
@@ -742,13 +743,13 @@ class Rpmdb:
         if not (repo_paths and fs_root):
             logger.error('Invalid arguments')
             return -1
-        for repo in repo_paths:
-            logger.info("\nScanning repository [%s]...\n" % (os.path.abspath(repo)))
-
-            if len(pkglist):
-                self.tmp_smu_repo_path, repo_files = Rpmdb.validate_and_return_list(platform, repo_paths, pkglist)
-            else:
-                repo_files += glob.glob(repo+"/*")
+        if len(pkglist):
+            self.tmp_smu_repo_path, repo_files = Rpmdb.validate_and_return_list(platform, repo_paths, pkglist)
+        else:
+            # If pkglist is empty, only RPM files in Repo to be added
+            for repo in repo_paths:
+                logger.info("\nScanning repository [%s]...\n" % (os.path.abspath(repo)))
+                repo_files += glob.glob(repo+"/*.rpm")
 
         # Notify skipped packages which are not present in repo
         if len(pkglist) and "all" not in pkglist:
@@ -1002,9 +1003,9 @@ class Rpmdb:
         if platform_missmatch_tp_rpms:
             logger.info("Skipped %s TP RPMS not matching platform %s"
                         % (len(platform_missmatch_tp_rpms), platform))
-        logger.debug('Found %s TP RPMs' % self.csc_rpm_count)
+        logger.debug('Found %s TP RPMs' % self.tp_rpm_count)
         list(map(lambda rpm_inst: logger.debug("\t\t%s" % rpm_inst.file_name),
-            self.csc_rpm_list))
+            self.tp_rpm_list))
         
     #
     # Filter and discard cnbng Cisco rpm if both bng and cnbng rpm present.
