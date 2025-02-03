@@ -66,7 +66,12 @@ from . import _blocks, _file, _isoformat, _packages, _pkgchecks, _pkgpicker
 _LOGFILE = "gisobuild.log"
 _log = logging.getLogger(__name__)
 
-_MIN_XR_VERSION_FOR_OWNER_PARTNER = _packages.XRVersion("7.11.1")
+# First XR version that supported specifying owner and partner packages.
+_MIN_XR_VERSION_FOR_OWNER_PARTNER = "7.11.1"
+# Prefixes of XR versions that fall between the version that first supported
+# owner and partner packages and the version that added the image.py capability
+# that indicates they are supported.
+_XR_VERSIONS_FOR_OWNER_PARTNER_BEFORE_CAP = ("7.11.", "24.", "25.1.1")
 
 ###############################################################################
 #                               Custom exceptions                             #
@@ -328,9 +333,11 @@ def _format_pid_types(pid_types: Dict[str, str]) -> str:
 
     # Map to readable names
     pid_types = {
-        pid: _isoformat.CARD_CLASS_READABLE[card_type]
-        if card_type in _isoformat.CARD_CLASS_READABLE
-        else card_type
+        pid: (
+            _isoformat.CARD_CLASS_READABLE[card_type]
+            if card_type in _isoformat.CARD_CLASS_READABLE
+            else card_type
+        )
         for pid, card_type in pid_types.items()
     }
     sorted_pids = sorted(pid_types.keys())
@@ -607,7 +614,8 @@ def _log_on_success(
 
 
 def _get_package_info_from_groups(
-    iso_dir: str, groups: List[str],
+    iso_dir: str,
+    groups: List[str],
 ) -> Tuple[Dict[str, str], Dict[str, "_packages.Package"]]:
     """
     Retrieve set of RPMs and corresponding package objects from the specified
@@ -636,7 +644,8 @@ def _get_package_info_from_groups(
 
 
 def _get_pkgs_from_groups(
-    iso_dir: str, groups: List[str],
+    iso_dir: str,
+    groups: List[str],
 ) -> List["_packages.Package"]:
     """
     Get the list of packages from the specified groups in the ISO.
@@ -778,9 +787,7 @@ def _coordinate_bridging(
 
     bridging_blocks = _blocks.group_packages(base_packages + packages_to_add)
 
-    blocks_to_include: Dict[
-        _packages.XRVersion, List[_blocks.AnyBlock]
-    ] = defaultdict(list)
+    blocks_to_include: Dict[str, List[_blocks.AnyBlock]] = defaultdict(list)
     blocks_to_exclude: List[_blocks.AnyBlock] = []
 
     # For each block, iterate over all versions of it.
@@ -843,7 +850,10 @@ def _coordinate_bridging(
 
 
 def _check_invalid_pkgs(
-    pkgs: Iterable[_packages.Package], iso_version: str, iso_archs: Set[str]
+    pkgs: Iterable[_packages.Package],
+    iso_version: str,
+    iso_archs: Set[str],
+    supports_owner_partner_packages: bool,
 ) -> None:
     """
     Check if the given packages are valid in terms of XR version and arch.
@@ -856,6 +866,9 @@ def _check_invalid_pkgs(
 
     :param iso_archs:
         The set of architectures of the packages in the input ISO.
+
+    :param supports_owner_partner_packages:
+        Whether the input ISO supports specifying owner and partner packages.
 
     :raises InvalidPkgsError:
         If there are any invalid packages.
@@ -870,15 +883,9 @@ def _check_invalid_pkgs(
         # party).
         if _blocks.is_xr_pkg(pkg) and pkg.version.xr_version != iso_version:
             different_xr_version_pkgs.add(pkg)
-        if (
-            pkg.is_owner_package
-            and _MIN_XR_VERSION_FOR_OWNER_PARTNER > iso_version
-        ):
+        if pkg.is_owner_package and not supports_owner_partner_packages:
             pre_supported_version_owner_pkgs.add(pkg)
-        if (
-            pkg.is_partner_package
-            and _MIN_XR_VERSION_FOR_OWNER_PARTNER > iso_version
-        ):
+        if pkg.is_partner_package and not supports_owner_partner_packages:
             pre_supported_version_partner_pkgs.add(pkg)
         if pkg.arch not in iso_archs:
             different_arch_pkgs.add(pkg)
@@ -930,7 +937,10 @@ def _check_invalid_bugfixes(
 
     if any([partner_packages, owner_packages, different_arch_pkgs]):
         raise InvalidBugfixesError(
-            partner_packages, owner_packages, different_arch_pkgs, iso_arch,
+            partner_packages,
+            owner_packages,
+            different_arch_pkgs,
+            iso_arch,
         )
 
 
@@ -978,6 +988,7 @@ def _coordinate_pkgs(
     mdata: Dict[str, Any],
     dev_signed: bool,
     iso_version: str,
+    supports_owner_partner_packages: bool,
 ) -> List["_packages.Package"]:
     """
     Coordinate the packages to include in the main install.
@@ -1005,8 +1016,8 @@ def _coordinate_pkgs(
         False if signed with the REL key.
     :param iso_version:
         The XR version of the input ISO.
-    :param iso_arch:
-        The architecture of the input ISO.
+    :param supports_owner_partner_packages:
+        Whether the input ISO supports specifying owner and partner packages.
 
     :return:
         List of packages in the final install.
@@ -1036,7 +1047,9 @@ def _coordinate_pkgs(
         _log.debug("  %s", str(pkg))
 
     iso_archs = {pkg.arch for pkg in iso_pkgs}
-    _check_invalid_pkgs(repo_pkgs, iso_version, iso_archs)
+    _check_invalid_pkgs(
+        repo_pkgs, iso_version, iso_archs, supports_owner_partner_packages
+    )
 
     _log.debug("Grouping ISO and repo packages into blocks")
     iso_blocks = _blocks.group_packages(iso_pkgs)
@@ -1083,6 +1096,32 @@ def _coordinate_pkgs(
         pkg
         for group in _isoformat.PackageGroup
         for pkg in giso_blocks.get_all_pkgs(group)
+    )
+
+
+def _supports_owner_partner_packages(
+    iso: image.Image, iso_version: str
+) -> bool:
+    """
+    Determine whether the ISO supports specifying owner and partner packages.
+
+    :param iso:
+        The image object representing the ISO.
+
+    :param iso_version:
+        The XR version of the ISO.
+
+    :returns:
+        True if the ISO supports specifying owner and partner packages; False
+        otherwise.
+    """
+    # ISO supports specifying owner and partner packages if it either contains
+    # an image.py capability indicating that it is supported, or falls in the
+    # range of XR versions since they were supported but before the image.py
+    # capability was added.
+    return iso.supports("owner-partner-packages") or any(
+        iso_version.startswith(x)
+        for x in _XR_VERSIONS_FOR_OWNER_PARTNER_BEFORE_CAP
     )
 
 
@@ -1165,24 +1204,21 @@ def _coordinate_giso(
         iso_content,
         iso_image.is_dev_signed,
         iso_version,
+        _supports_owner_partner_packages(iso_image, iso_version),
     )
 
-    # If key requests are to be removed, remove them before adding new ones.
-    if args.remove_all_key_requests:
-        _file.remove_all_key_requests(out_dir, iso_content)
-    if args.remove_key_requests:
-        _file.remove_key_requests(
-            out_dir, iso_content, args.remove_key_requests
-        )
+    # If key requests are to be removed or added, remove existing ones before
+    # adding new ones.
+    if args.clear_key_request or args.key_request:
+        _file.clear_key_request(out_dir, iso_content)
 
     # Add key requests
-    if args.key_requests:
-        for key_request in args.key_requests:
-            _file.add_package(
-                out_dir,
-                pkg=key_request,
-                group=_isoformat.PackageGroup.KEY_PKGS,
-            )
+    if args.key_request:
+        _file.add_package(
+            out_dir,
+            pkg=args.key_request,
+            group=_isoformat.PackageGroup.KEY_PKGS,
+        )
 
     # If clear bridging fixes requested, remove all bridging fixes before
     # adding new ones
@@ -1210,7 +1246,9 @@ def _coordinate_giso(
         with open(label_file, "w") as lbl:
             lbl.write(args.label)
         _file.add_package(
-            out_dir, file_to_add=label_file, file_type=_file.FileType.LABEL,
+            out_dir,
+            file_to_add=label_file,
+            file_type=_file.FileType.LABEL,
         )
     if args.xrconfig:
         _file.add_package(
@@ -1220,7 +1258,9 @@ def _coordinate_giso(
         )
     if args.ztp_ini:
         _file.add_package(
-            out_dir, file_to_add=args.ztp_ini, file_type=_file.FileType.ZTP,
+            out_dir,
+            file_to_add=args.ztp_ini,
+            file_type=_file.FileType.ZTP,
         )
 
     new_mdata, new_buildinfo = _get_updated_mdata(
@@ -1237,7 +1277,9 @@ def _coordinate_giso(
     with open(mdata_file, "w") as mdata_f:
         mdata_f.write(json_mdata)
     _file.add_package(
-        out_dir, file_to_add=mdata_file, file_type=_file.FileType.MDATA,
+        out_dir,
+        file_to_add=mdata_file,
+        file_type=_file.FileType.MDATA,
     )
 
     # Update the build-info.txt even if the "--no-buildinfo" argument is given,
@@ -1258,7 +1300,9 @@ def _coordinate_giso(
 
     # Now that all desired files and packages have been added/removed repack
     # the ISO then build the USB image unless skipped
-    platform_golden = "{}-golden".format(new_mdata["platform-family"],)
+    platform_golden = "{}-golden".format(
+        new_mdata["platform-family"],
+    )
     arch = ""
     if "architecture" in new_mdata.keys():
         arch = "-{}".format(new_mdata["architecture"])
@@ -1295,7 +1339,9 @@ def _coordinate_giso(
     if args.create_checksum:
         checksum_file = gglobals.CHECKSUM_FILE_NAME
         ggisoutils.create_checksum_file(
-            out_dir, files_to_checksum, checksum_file,
+            out_dir,
+            files_to_checksum,
+            checksum_file,
         )
 
     if args.copy_dir:

@@ -65,7 +65,8 @@ def run(args: argparse.Namespace) -> None:
         "default build tools",
     )
     bes.log_tools(
-        gisoutils.set_user_specified_tools(args), "user-specified build tools",
+        gisoutils.set_user_specified_tools(args),
+        "user-specified build tools",
     )
     bes.log_tools(
         {

@@ -76,7 +76,9 @@ class QueryFormatError(_BaseError):
     """
 
     def __init__(
-        self, pkg_path: pathlib.Path, exc: subprocess.CalledProcessError,
+        self,
+        pkg_path: pathlib.Path,
+        exc: subprocess.CalledProcessError,
     ) -> None:
         super().__init__(exc, f"Query of RPM {pkg_path} failed:")
 
@@ -88,7 +90,9 @@ class ImportSignatureKeyError(_BaseError):
     """
 
     def __init__(
-        self, key_file: pathlib.Path, exc: subprocess.CalledProcessError,
+        self,
+        key_file: pathlib.Path,
+        exc: subprocess.CalledProcessError,
     ) -> None:
         super().__init__(
             exc, f"Failed to import key '{key_file.name}' to RPM database"
@@ -102,7 +106,9 @@ class CheckSignatureError(_BaseError):
     """
 
     def __init__(
-        self, pkg_path: pathlib.Path, exc: subprocess.CalledProcessError,
+        self,
+        pkg_path: pathlib.Path,
+        exc: subprocess.CalledProcessError,
     ) -> None:
         super().__init__(exc, f"Error when checking signatures for {pkg_path}")
 
@@ -113,7 +119,10 @@ class CheckInstallError(_BaseError):
 
     """
 
-    def __init__(self, exc: subprocess.CalledProcessError,) -> None:
+    def __init__(
+        self,
+        exc: subprocess.CalledProcessError,
+    ) -> None:
         super().__init__(exc, "Error checking if the packages are installable")
 
 

@@ -236,9 +236,9 @@ def generate_buildinfo_mdata() -> Dict[str, str]:
     new_mdata = {}
 
     # Populate build info fields
-    new_mdata[
-        gisoglobals.LNT_GISO_BUILD_TIME
-    ] = datetime.datetime.now().strftime("%b %d, %Y %H:%M:%S")
+    new_mdata[gisoglobals.LNT_GISO_BUILD_TIME] = (
+        datetime.datetime.now().strftime("%b %d, %Y %H:%M:%S")
+    )
     new_mdata[gisoglobals.LNT_GISO_BUILD_CMD] = " ".join(sys.argv)
 
     new_mdata[gisoglobals.LNT_GISO_BUILDER] = getpass.getuser()
@@ -685,7 +685,11 @@ def xml_strip_ns(xml: Any) -> None:
 
 
 def init_logging(
-    log_dir: str, log_file: str, *, debug: bool = False, disable: bool = False,
+    log_dir: str,
+    log_file: str,
+    *,
+    debug: bool = False,
+    disable: bool = False,
 ) -> logging.Logger:
     """
     Initialize stderr and debug file logging.

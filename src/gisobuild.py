@@ -52,7 +52,8 @@ class InvalidPkgListPkgError(Exception):
     """Error if the package list contains invalid packages."""
 
     def __init__(
-        self, pkgs: Set[str],
+        self,
+        pkgs: Set[str],
     ):
         """
         Initialize the class.
@@ -183,13 +184,11 @@ def parsecli() -> Tuple[argparse.Namespace, argparse.ArgumentParser]:
     )
 
     parser.add_argument(
-        "--key-requests",
-        dest="key_requests",
+        "--key-request",
+        dest="key_request",
         required=False,
-        nargs="+",
-        default=[],
-        help="Key requests to package to be used when validating "
-        "customer and partner RPMs.",
+        help="Key request to package to be used when validating customer and "
+        "partner RPMs.",
     )
 
     parser.add_argument(
@@ -282,7 +281,9 @@ def parsecli() -> Tuple[argparse.Namespace, argparse.ArgumentParser]:
         help="Do not build the USB image",
     )
     lntgroup.add_argument(
-        "--skip-dep-check", action="store_true", help=argparse.SUPPRESS,
+        "--skip-dep-check",
+        action="store_true",
+        help=argparse.SUPPRESS,
     )
 
     lntgroup.add_argument(
@@ -307,7 +308,10 @@ def parsecli() -> Tuple[argparse.Namespace, argparse.ArgumentParser]:
     # Hidden argument to allow GISO build metadata to be given as a json file
     # instead of being generated during the GISO build.
     lntgroup.add_argument(
-        "--buildinfo", dest="buildinfo", type=str, help=argparse.SUPPRESS,
+        "--buildinfo",
+        dest="buildinfo",
+        type=str,
+        help=argparse.SUPPRESS,
     )
     lntgroup.add_argument(
         "--debug",
@@ -343,18 +347,9 @@ def parsecli() -> Tuple[argparse.Namespace, argparse.ArgumentParser]:
         ),
     )
     lntgroup.add_argument(
-        "--remove-all-key-requests",
+        "--clear-key-request",
         action="store_true",
         help="Remove all key requests from the input ISO",
-    )
-    lntgroup.add_argument(
-        "--remove-key-requests",
-        nargs="+",
-        default=[],
-        help=(
-            "Remove key requests, specified in a space separated list. These "
-            "are matched against the filename, e.g. key_request.kpkg"
-        ),
     )
     lntgroup.add_argument(
         "--no-buildinfo",
@@ -516,15 +511,10 @@ def validate_and_setup_args(args: argparse.Namespace) -> argparse.Namespace:
             )
 
     # Check key packages if provided.
-    if args.key_requests:
-        missing_key_requests = [
-            k for k in args.key_requests if not os.path.exists(k)
-        ]
-        if missing_key_requests:
+    if args.key_request:
+        if not os.path.exists(args.key_request):
             raise AssertionError(
-                "Error: The following key requests do not exist: {}".format(
-                    ", ".join(missing_key_requests)
-                )
+                f"Error: The given key request does not exist: {args.key_request}"
             )
     return args
 
@@ -574,7 +564,9 @@ def main() -> None:
     # Set up the build env
     try:
         gisoutils.create_working_dir(
-            cli_args.clean, cli_args.out_directory, MODULE_NAME,
+            cli_args.clean,
+            cli_args.out_directory,
+            MODULE_NAME,
         )
     except OSError as error:
         print(

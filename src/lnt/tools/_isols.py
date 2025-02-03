@@ -154,7 +154,8 @@ def display_build_info(iso: image.Image, *, print_json: bool = False) -> None:
                 json_data["mdata"][isoglobals.LNT_GISO_LABEL] = label
     # Populate any missing fields from buildinfo
     json_data["mdata"] = gisoutils.parse_buildinfo_mdata(
-        iso.show_buildinfo(), json_data["mdata"],
+        iso.show_buildinfo(),
+        json_data["mdata"],
     )
     if print_json:
         _print_json_data(json_data["mdata"])
@@ -191,11 +192,9 @@ def display_fixes(iso: image.Image, *, print_json: bool = False) -> None:
         print(fixes, end="")
 
 
-def display_key_requests(
-    iso: image.Image, *, print_json: bool = False
-) -> None:
+def display_key_request(iso: image.Image, *, print_json: bool = False) -> None:
     """
-    List the key requests contained in the ISO.
+    Provide the path to the key request contained in the ISO.
 
     :param iso:
         The ISO to query.
@@ -204,13 +203,13 @@ def display_key_requests(
         Print the output in JSON format.
 
     """
-    key_requests = iso.list_key_requests()
+    key_request = iso.get_key_request()
 
     if print_json:
-        _print_json_data(key_requests)
+        _print_json_data([key_request])
     else:
-        if key_requests:
-            print("\n".join(key_requests))
+        if key_request:
+            print(key_request)
 
 
 def list_packages(
@@ -358,15 +357,15 @@ def dump_mdata(iso: image.Image) -> None:
             (group, pkgs) for (group, pkgs) in data.items()
         )
 
-    # Update the metadata with the key requests
+    # Update the metadata with the key request
     try:
-        key_requests = iso.list_key_requests()
+        key_request = iso.get_key_request()
     except image.CapabilityNotSupported as exc:
         _log.debug(str(exc))
     except Exception as exc:
-        _log.error("Unable to add key requests: %s", exc)
+        _log.error("Unable to add key request: %s", exc)
     else:
-        mdata["key-requests"] = key_requests
+        mdata["key-request"] = key_request
 
     json.dump(mdata, sys.stdout, indent=4, sort_keys=True)
 
@@ -433,8 +432,8 @@ def _run_isols_cmds(args: argparse.Namespace) -> None:
             group_tags=["partner_packages"],
             print_json=args.json,
         )
-    elif args.KEYREQUESTS:
-        display_key_requests(iso, print_json=args.json)
+    elif args.KEYREQUEST:
+        display_key_request(iso, print_json=args.json)
     elif args.GROUPS:
         list_packages(iso, groups=True, print_json=args.json)
     elif args.DUMP_MDATA:
@@ -547,10 +546,10 @@ def _parse_args(argv: List[str]) -> argparse.Namespace:
         action="store_true",
     )
     isols_group.add_argument(
-        "--key-requests",
-        dest="KEYREQUESTS",
+        "--key-request",
+        dest="KEYREQUEST",
         default=False,
-        help="List all key requests in the ISO",
+        help="Provide the key request in the ISO",
         action="store_true",
     )
     isols_group.add_argument(

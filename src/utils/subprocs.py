@@ -68,7 +68,11 @@ def _execute_internal(
         _logger.debug("Running command: %s", " ".join(cmd))
     try:
         proc = subprocess.run(
-            cmd, check=True, encoding="utf-8", stdout=stdout, stderr=stderr,
+            cmd,
+            check=True,
+            encoding="utf-8",
+            stdout=stdout,
+            stderr=stderr,
         )
     except subprocess.CalledProcessError as e:
         _logger.debug(
