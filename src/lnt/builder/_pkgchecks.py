@@ -188,20 +188,20 @@ def _verify_dependencies(
     pkg_to_file: Mapping[_packages.Package, pathlib.Path],
 ) -> Optional[_VerifyDependenciesError]:
     """
-        Call rpm to verify the dependencies of the given packages
+    Call rpm to verify the dependencies of the given packages
 
-        :param pid:
-             The name of the PID that the dependencies are being verified for.
+    :param pid:
+         The name of the PID that the dependencies are being verified for.
 
-        :param pid_pkgs:
-            The paths to the set of packages on 'pid'.
+    :param pid_pkgs:
+        The paths to the set of packages on 'pid'.
 
-        :param pkg_to_file:
-            Mapping of package to the filepath on disk.
+    :param pkg_to_file:
+        Mapping of package to the filepath on disk.
 
-        :returns:
-            A _VerifyDependenciesError if the depedencies are not met, else None
-        """
+    :returns:
+        A _VerifyDependenciesError if the depedencies are not met, else None
+    """
     pid_pkg_paths = {pkg_to_file[pkg] for pkg in pid_pkgs}
     _logger.debug("Checking dependencies for PID %s", pid)
     with _init_rpm_db() as db_dir:

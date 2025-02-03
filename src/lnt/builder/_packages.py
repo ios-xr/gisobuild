@@ -27,7 +27,6 @@ __all__ = (
     "packages_to_file_paths",
     "UnspecifiedRPMAttrError",
     "Version",
-    "XRVersion",
 )
 
 
@@ -36,7 +35,6 @@ import hashlib
 import logging
 import os
 import pathlib
-import re
 from typing import (
     Collection,
     Dict,
@@ -109,7 +107,10 @@ def _repodata_to_etree(repodata_str: str) -> ElementTree:
     return cast(ElementTree, xml)
 
 
-def _get_elem(data: Element, tag: str,) -> Optional[Element]:
+def _get_elem(
+    data: Element,
+    tag: str,
+) -> Optional[Element]:
     return data.find(tag)
 
 
@@ -126,96 +127,6 @@ def _get_attribute(data: Element, tag: str) -> str:
         return data.attrib[tag]
     else:
         return ""
-
-
-@dataclasses.dataclass(frozen=True)
-class XRVersion:
-    """
-    Represents an XR version containing methods to compare with another version.
-
-    .. attribute:: xrversion
-
-        The XR version string.
-
-    """
-
-    xrversion: str
-    _re_form: str = r"^\d+\.\d+\.\d+(\.\d+[A-Z])?$"
-
-    def __post_init__(self) -> None:
-        if not re.match(self._re_form, self.xrversion):
-            raise ValueError(
-                f"XR version {self.xrversion} is not in the form a.b.c(.dI)"
-            )
-
-    def __bool__(self) -> bool:
-        """
-        Check if the version is set.
-
-        :return:
-            True if the version is set, False otherwise.
-        """
-        return bool(self.xrversion)
-
-    def __eq__(self, other: object) -> bool:
-        """
-        Compare two XR versions.
-
-        :param other:
-            The other XRVersion object to compare to.
-
-        :return:
-            True if this version is equal to the other version, False otherwise.
-        """
-        if isinstance(other, str):
-            return self.xrversion == other
-
-        if not isinstance(other, XRVersion):
-            raise TypeError(
-                f"Cannot compare XRVersion object with {type(other)}"
-            )
-        return self.xrversion == other.xrversion
-
-    def __gt__(self, _other: object) -> bool:
-        """
-        Compare two XR versions.
-
-        :param _other:
-            The other object to compare to. Can be a correctly formatted string,
-            or another XRVersion object.
-
-        :return:
-            True if this version is greater than the other version, False
-            otherwise.
-        """
-        if isinstance(_other, str):
-            other = XRVersion(_other)
-        elif not isinstance(_other, XRVersion):
-            raise TypeError(
-                f"Cannot compare XRVersion object with {type(_other)}"
-            )
-        else:
-            assert isinstance(_other, XRVersion)
-            other = _other
-
-        # Remove letter for internal version when splitting into components
-        my_xrversion = re.sub(r"[A-Z]$", "", self.xrversion)
-        their_xrversion = re.sub(r"[A-Z]$", "", other.xrversion)
-
-        me = [int(n) for n in my_xrversion.split(".")]
-        them = [int(n) for n in their_xrversion.split(".")]
-
-        for i, j in zip(
-            me, them
-        ):  # Drop internal version if one doesn't have it
-            if i > j:
-                return True
-            if j > i:
-                return False
-        return False
-
-    def __str__(self) -> str:
-        return self.xrversion
 
 
 @dataclasses.dataclass(frozen=True)
@@ -253,14 +164,14 @@ class Version:
             return ("", self.version)
 
     @property
-    def xr_version(self) -> Optional[XRVersion]:
+    def xr_version(self) -> Optional[str]:
         """
         Get the XR version out of the full RPM version string.
 
         """
         xrversion = self._split()[0]
         if xrversion:
-            return XRVersion(xrversion)
+            return xrversion
         return None
 
     @property
@@ -324,6 +235,8 @@ class PackageDep:
 
     """
 
+    _COMPARISON_OPERATORS = ["=", "<", "<=", ">", ">="]
+
     name: str
     flags: Optional[str]
     version: Optional[str]
@@ -348,7 +261,7 @@ class PackageDep:
 
         """
         toks = query.split()
-        if len(toks) == 3:
+        if len(toks) == 3 and toks[1] in cls._COMPARISON_OPERATORS:
             # For example:
             #   xr-foo = 1.2.3v1.0.0
             # where:
@@ -368,6 +281,8 @@ class PackageDep:
             # store the whole string as the name to match rpm's behavior.
             # For example:
             #   (xr-foo = 1.2.3v1.0.0 if xr-foo)
+            # or
+            #   (xr-foo or xr-bar)
             # where we store the whole string as name, and flags and version
             # are empty.
             # If toks has 2 elements then we'd also fall into this statement. I

@@ -130,7 +130,7 @@ class BridgeRpmDB:
         extract_path = tempfile.mkdtemp (dir = self.out_dir)
         try:
             with tarfile.open(tarf, "r") as tar:
-                tar_extract_all(tar, extract_path)
+                gu.tar_extract_all(tar, extract_path)
         except Exception as e:
             raise AssertionError ("Unable to extract {}:{}".format (
                                        tarf, e))

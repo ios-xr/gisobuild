@@ -217,7 +217,8 @@ def _compare_pkg_files(
     pkg_list_2: Dict[Package, List[RPMFile]],
     unchanged_pkg_list: Dict[Package, List[RPMFile]],
 ) -> Tuple[
-    List[Tuple[RPMFile, RPMFile]], List[RPMFile],
+    List[Tuple[RPMFile, RPMFile]],
+    List[RPMFile],
 ]:
     """
     Compare files within a RPM and determine whether they should be added to
@@ -576,7 +577,8 @@ def _get_package_files(
     with tempfile.TemporaryDirectory() as extract_dir:
         # Extract all rpms for all the groups in ISO1
         iso1.extract_groups(
-            groups_in_iso1, extract_dir,
+            groups_in_iso1,
+            extract_dir,
         )
         # Get the list of rpms that were extracted
         extracted_rpms = [
@@ -598,7 +600,8 @@ def _get_package_files(
 
     with tempfile.TemporaryDirectory() as extract_dir:
         iso2.extract_groups(
-            groups_in_iso2, extract_dir,
+            groups_in_iso2,
+            extract_dir,
         )
         extracted_rpms = [
             pkg

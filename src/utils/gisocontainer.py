@@ -226,7 +226,8 @@ def _get_volumes_to_mount(args: argparse.Namespace, infile: str) -> List[str]:
 
 
 def _stage_artefacts(
-    out_dir: pathlib.Path, container_name: str,
+    out_dir: pathlib.Path,
+    container_name: str,
 ) -> pathlib.Path:
     """
     Stage build artefacts from container
@@ -633,7 +634,7 @@ def _build_optim_image() -> str:
 
 def _pull_signing_env(cli_args: argparse.Namespace) -> str:
     """
-        Create the signing environment used for sign the image.
+    Create the signing environment used for sign the image.
     """
     o_path = pathlib.Path(__file__).parents[3] / "exr"
     if str(o_path) not in sys.path:

@@ -9,17 +9,15 @@ usage: gisobuild.py [-h] [--iso ISO] [--repo REPO [REPO ...]]
                     [--no-label] [--out-directory OUT_DIRECTORY]
                     [--create-checksum] [--yamlfile CLI_YAML] [--clean]
                     [--pkglist PKGLIST [PKGLIST ...]]
-                    [--key-requests KEY_REQUESTS [KEY_REQUESTS ...]]
-                    [--docker] [--bes-logging] [--script SCRIPT] [--x86-only]
-                    [--migration] [--optimize] [--full-iso]
+                    [--key-request KEY_REQUEST] [--docker] [--bes-logging]
+                    [--script SCRIPT] [--x86-only] [--migration] [--optimize]
+                    [--full-iso]
                     [--remove-packages REMOVE_PACKAGES [REMOVE_PACKAGES ...]]
                     [--skip-usb-image] [--copy-dir COPY_DIRECTORY]
                     [--clear-bridging-fixes] [--verbose-dep-check] [--debug]
                     [--isoinfo ISOINFO] [--image-script IMAGE_SCRIPT]
                     [--only-support-pids ONLY_SUPPORT_PIDS [ONLY_SUPPORT_PIDS ...]]
-                    [--remove-all-key-requests]
-                    [--remove-key-requests REMOVE_KEY_REQUESTS [REMOVE_KEY_REQUESTS ...]]
-                    [--no-buildinfo] [--version]
+                    [--clear-key-request] [--no-buildinfo] [--version]
 
 Utility to build Golden ISO for IOS-XR.
 
@@ -58,8 +56,8 @@ optional arguments:
                         package is in will be included as well. Package names
                         can be specified to include optional packages in the
                         output GISO.
-  --key-requests KEY_REQUESTS [KEY_REQUESTS ...]
-                        Key requests to package to be used when validating
+  --key-request KEY_REQUEST
+                        Key request to package to be used when validating
                         customer and partner RPMs.
   --docker, --use-container
                         Build GISO in container environment.Pulls and run pre-
@@ -105,12 +103,7 @@ LNT only build options:
                         is generally used to reduce the size of the output
                         ISO. Do not use this option before discussing with
                         Cisco support.
-  --remove-all-key-requests
-                        Remove all key requests from the input ISO
-  --remove-key-requests REMOVE_KEY_REQUESTS [REMOVE_KEY_REQUESTS ...]
-                        Remove key requests, specified in a space separated
-                        list. These are matched against the filename, e.g.
-                        key_request.kpkg
+  --clear-key-request   Remove all key requests from the input ISO
   --no-buildinfo        Do not update the build metadata in mdata.json with
                         the GISO build information
 
@@ -154,9 +147,8 @@ discussed it with Cisco support.
 ### Key requests
 
 Key requests (AKA key packages) that should be onboarded for validating owner
-and partner RPMs can be specified using the `--key-requests <file1> <file2>`
-argument and removed using `--remove-all-key-requests` or
-`--remove-key-requests <file1> <file2>`.
+and partner RPMs can be specified using the `--key-request <file>` argument and
+removed using `--clear-key-request`.
 
 For instructions on creating and verifying key requests, see the
 [key-package-scripts repo](https://github.com/ios-xr/key-package-scripts/tree/master).

@@ -35,6 +35,7 @@ import collections
 import dataclasses
 import itertools
 import logging
+import re
 from typing import (
     Dict,
     FrozenSet,
@@ -657,7 +658,8 @@ class GroupedPackages:
         pkgs_to_remove = self.get_all_pkgs_all_groups() - pkgs_to_keep
 
         _log.debug(
-            "Packages marked for removal: %s", pkgs_to_remove,
+            "Packages marked for removal: %s",
+            pkgs_to_remove,
         )
 
         def _remove_pkgs_from_group(
@@ -673,7 +675,8 @@ class GroupedPackages:
                     # Remove some pkgs from the block only if necessary
                     if any((pkg in pkgs_to_remove) for pkg in block.all_pkgs):
                         _log.debug(
-                            "Filtering block %s", str(block.name),
+                            "Filtering block %s",
+                            str(block.name),
                         )
                         block_versions[block_evra] = block.filter_pkgs(
                             pkgs_to_remove
@@ -700,7 +703,9 @@ def _get_dep_by_name(
 
     """
     for dep in deps:
-        if dep.name == name:
+        # Allow for boolean dependencies, e.g.
+        #   (cisco-pid-88-LC0-36FH or cisco-pid-88-LC0-36FH-M)
+        if dep.name == name or re.search(r"[( ]{}[) ]".format(name), dep.name):
             return dep
     return None
 
@@ -857,7 +862,8 @@ def _get_partner_packages(
 
 
 def _get_instance_packages(
-    candidate_block_names: Set[str], pkgs: Iterable[_packages.Package],
+    candidate_block_names: Set[str],
+    pkgs: Iterable[_packages.Package],
 ) -> Iterator[Tuple[str, _packages.Package]]:
     """
     Yield the subset of the given packages that are block instance packages.
@@ -893,7 +899,8 @@ def _get_instance_packages(
 
 
 def _get_partition_packages(
-    candidate_block_names: Set[str], pkgs: Iterable[_packages.Package],
+    candidate_block_names: Set[str],
+    pkgs: Iterable[_packages.Package],
 ) -> Iterator[Tuple[str, _packages.Package]]:
     """
     Yield the subset of the given packages that are block partition packages.
@@ -928,7 +935,8 @@ def _get_partition_packages(
 
 
 def _get_tied_packages(
-    tie_pkg: _packages.Package, pkgs: Iterable[_packages.Package],
+    tie_pkg: _packages.Package,
+    pkgs: Iterable[_packages.Package],
 ) -> Iterator[_packages.Package]:
     """
     Yield the subset of the given packages that are thirdparty tied packages.
@@ -1057,7 +1065,8 @@ def group_packages(pkgs: Iterable[_packages.Package]) -> GroupedPackages:
             # Doesn't match any version of the block; so don't remove from
             # remaining packages
             _log.debug(
-                "No block found for instance package: %s", str(e),
+                "No block found for instance package: %s",
+                str(e),
             )
         else:
             remaining_pkgs.remove(pkg)
@@ -1074,7 +1083,8 @@ def group_packages(pkgs: Iterable[_packages.Package]) -> GroupedPackages:
             # Doesn't match any version of the block; so don't remove from
             # remaining packages
             _log.debug(
-                "No block found for partition package: %s", str(e),
+                "No block found for partition package: %s",
+                str(e),
             )
         else:
             remaining_pkgs.remove(pkg)
