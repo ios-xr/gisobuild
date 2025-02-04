@@ -26,7 +26,6 @@ __all__ = (
     "get_xr_required_packages",
     "run",
     "Package",
-    "ReqPackageBeingRemovedError",
 )
 
 
@@ -36,5 +35,4 @@ from ._blocks import (
     get_xr_required_packages,
 )
 from ._build import run
-from ._coordinate import ReqPackageBeingRemovedError
 from ._packages import Package, get_packages_from_repodata

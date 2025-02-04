@@ -42,9 +42,8 @@ class Packages:
     skip_dep_check: bool
     clear_bridging_fixes: bool
     only_support_pids: Optional[List[str]]
-    key_requests: List[str]
-    remove_all_key_requests: bool
-    remove_key_requests: List[str]
+    key_request: Optional[str]
+    clear_key_request: bool
 
     @classmethod
     def from_dict(cls, ydict: Dict[str, Any]) -> "Packages":
@@ -61,9 +60,8 @@ class Packages:
         skip_dep_check = False
         clear_bridging_fixes = False
         only_support_pids: Optional[List[str]] = None
-        key_requests: List[str] = []
-        remove_all_key_requests = False
-        remove_key_requests: List[str] = []
+        key_request: Optional[str] = None
+        clear_key_request = False
 
         if ydict:
             iso = ydict.get("iso", "")
@@ -123,15 +121,13 @@ class Packages:
             elif ydict.get("only_support_pids"):
                 only_support_pids = ydict.get("only_support_pids")
 
-            key_requests.extend(ydict.get("key-requests", []))
-            key_requests.extend(ydict.get("key_requests", []))
+            key_request = ydict.get("key-request", None) or ydict.get(
+                "key_request", None
+            )
 
-            remove_all_key_requests = ydict.get(
-                "remove-all-key-requests", False
-            ) or ydict.get("remove_all_key_requests", False)
-
-            remove_key_requests.extend(ydict.get("remove-key-requests", []))
-            remove_key_requests.extend(ydict.get("remove_key_requests", []))
+            clear_key_request = ydict.get(
+                "clear-key-request", False
+            ) or ydict.get("clear_key_request", False)
 
         return validate.create(
             cls,
@@ -146,9 +142,8 @@ class Packages:
                 "bridge_fixes": bridge_fixes,
                 "clear_bridging_fixes": clear_bridging_fixes,
                 "only_support_pids": only_support_pids,
-                "key_requests": key_requests,
-                "remove_all_key_requests": remove_all_key_requests,
-                "remove_key_requests": remove_key_requests,
+                "key_request": key_request,
+                "clear_key_request": clear_key_request,
             },
         )
 

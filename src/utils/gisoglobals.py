@@ -107,9 +107,8 @@ EXR_CLI_DICT_MAP = {
     "debug": "debug",
     "isoinfo": None,
     "image_script": None,
-    "key_requests": None,
-    "remove_all_key_requests": None,
-    "remove_key_requests": None,
+    "key_request": None,
+    "clear_key_request": None,
     "no_buildinfo": None,
 }
 
@@ -148,9 +147,8 @@ LNT_CLI_DICT_MAP = {
     "isoinfo": "isoinfo",
     "image_script": "image_script",
     "only_support_pids": "only_support_pids",
-    "key_requests": "key_requests",
-    "remove_all_key_requests": "remove_all_key_requests",
-    "remove_key_requests": "remove_key_requests",
+    "key_request": "key_request",
+    "clear_key_request": "clear_key_request",
     "no_buildinfo": "no_buildinfo",
 }
 
@@ -197,6 +195,7 @@ EXR_ENV_VARS = {
 # sanitizing the environment.
 REQUIRED_ENV_VARS = {
     "PATH",
+    "TMPDIR",
 }
 
 # Names of parsed CLI arguments that correspond to input files and directories
@@ -211,7 +210,7 @@ INPUT_FILE_DIR_ARGS_EXR = ()
 INPUT_FILE_DIR_ARGS_CMN = (
     "cli_yaml",
     "iso",
-    "key_requests",
+    "key_request",
     "repo",
     "xrconfig",
     "ztp_ini",

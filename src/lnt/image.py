@@ -226,7 +226,9 @@ def call_image_py(
     cmd += args
     try:
         output = subprocess.check_output(
-            cmd, encoding="utf-8", stderr=subprocess.STDOUT,
+            cmd,
+            encoding="utf-8",
+            stderr=subprocess.STDOUT,
         )
     except subprocess.CalledProcessError as error:
         raise ImageScriptExecutionError(error) from error
@@ -389,9 +391,10 @@ class Image:
             self._tmp_dir = TemporaryDirectory(prefix=prefix)
             tmp_dir = self._tmp_dir.name
 
-        (self.image_script, self.dev_signed,) = gisoutils.extract_image_py_sig(
-            self.iso, tmp_dir
-        )
+        (
+            self.image_script,
+            self.dev_signed,
+        ) = gisoutils.extract_image_py_sig(self.iso, tmp_dir)
         self._capabilities = _Capabilities(self.image_script)
         if not self._capabilities.caps():
             raise NoCapabilitiesError
@@ -725,7 +728,9 @@ class Image:
     def list_squashfs(self) -> List[str]:
         """List all the files in the squashfs."""
         files = self._call_image_py_if_caps_supported(
-            iso=self.iso, operation="list-squashfs", log_dir=self.log_dir,
+            iso=self.iso,
+            operation="list-squashfs",
+            log_dir=self.log_dir,
         )
         return [file for file in files.split("\n") if file]
 
@@ -733,7 +738,9 @@ class Image:
         """Returns the label of the ISO."""
         _caps = "show-label"
         return self._call_image_py_if_caps_supported(
-            iso=self.iso, operation="show-label", log_dir=self.log_dir,
+            iso=self.iso,
+            operation="show-label",
+            log_dir=self.log_dir,
         ).strip()
 
     def show_buildinfo(self) -> str:
@@ -764,7 +771,9 @@ class Image:
         """Returns a list of the bugfixes in the ISO."""
         try:
             return self._call_image_py_if_caps_supported(
-                iso=self.iso, operation="list-bugfixes", log_dir=self.log_dir,
+                iso=self.iso,
+                operation="list-bugfixes",
+                log_dir=self.log_dir,
             )
         except CapabilityNotSupported:
             json_data = self.query_content()
@@ -796,11 +805,13 @@ class Image:
             caps="list-pids",
         )
 
-    def list_key_requests(self) -> List[str]:
-        """Returns a list of key requests in the ISO."""
+    def get_key_request(self) -> str:
+        """Returns the path to the key request in the ISO."""
         return self._call_image_py_if_caps_supported(
-            iso=self.iso, operation="list-key-requests", log_dir=self.log_dir,
-        ).splitlines()
+            iso=self.iso,
+            operation="list-key-requests",
+            log_dir=self.log_dir,
+        )
 
     ###############################################################################
     #                        Data handling of image.py                            #

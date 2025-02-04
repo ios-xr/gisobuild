@@ -26,8 +26,7 @@ __all__ = (
     "add_bridging_bugfix",
     "get_zipped_and_unzipped_rpms",
     "remove_package",
-    "remove_all_key_requests",
-    "remove_key_requests",
+    "clear_key_request",
     # Exceptions
     "ItemToAddNotSpecifiedError",
     "CopyPkgError",
@@ -534,83 +533,51 @@ def clear_bridging_bugfixes(iso_dir: str, mdata: Dict[str, Any]) -> None:
         mdata["groups"], "bridging"
     )
     for group in bridging_groups:
-        shutil.rmtree(
-            os.path.join(iso_dir, _isoformat.ISO_GROUP_PKG_DIR.format(group))
-        )
-        _log.debug(
-            "Removed packages %s", _isoformat.ISO_GROUP_PKG_DIR.format(group)
-        )
-
-
-def remove_all_key_requests(iso_dir: str, mdata: Dict[str, Any]) -> None:
-    """
-    Remove all key requests from the unpacked ISO.
-
-    :param iso_dir:
-        The directory in which the ISO has been unpacked.
-
-    :param mdata:
-        Iso metadata, as parsed json object returned from query content.
-
-    """
-    key_request_groups = gisoutils.get_groups_with_attr(
-        mdata["groups"], "key_packages"
-    )
-    for group in key_request_groups:
-        shutil.rmtree(
-            os.path.join(iso_dir, _isoformat.ISO_GROUP_PKG_DIR.format(group))
-        )
-        _log.debug(
-            "Removed key requests '%s'",
-            _isoformat.ISO_GROUP_PKG_DIR.format(group),
-        )
-
-
-def remove_key_requests(
-    iso_dir: str, mdata: Dict[str, Any], key_requests: List[str]
-) -> None:
-    """
-    Remove specified key requests from the unpacked ISO.
-
-    :param iso_dir:
-        The directory in which the ISO has been unpacked.
-
-    :param mdata:
-        Iso metadata, as parsed json object returned from query content.
-
-    :param key_requests:
-        Filenames of key requests to be removed.
-
-    """
-    key_request_groups = gisoutils.get_groups_with_attr(
-        mdata["groups"], "key_packages"
-    )
-    missing_key_requests: List[str] = key_requests.copy()
-    for group in key_request_groups:
-        packages_dir = os.path.join(
+        group_dir = os.path.join(
             iso_dir, _isoformat.ISO_GROUP_PKG_DIR.format(group)
         )
-        for key_request in key_requests:
-            key_request_path = os.path.join(
-                packages_dir, os.path.basename(key_request)
+        if os.path.exists(group_dir):
+            shutil.rmtree(group_dir)
+            _log.debug(
+                "Removed packages %s",
+                _isoformat.ISO_GROUP_PKG_DIR.format(group),
             )
-            if os.path.exists(key_request_path):
-                os.remove(key_request_path)
-                missing_key_requests.remove(key_request)
-                _log.debug(
-                    "Removed key request '%s' in group '%s'",
-                    key_request,
-                    group,
-                )
-    if missing_key_requests:
-        msg = (
-            "Some user-specified key requests to be removed could not be found "
-            "in the ISO. This may be due to a user error: {}".format(
-                ", ".join(sorted(missing_key_requests))
+        else:
+            _log.debug(
+                "Could not find the %s directory, so have not attempted to delete any bridging bugfixes",
+                _isoformat.ISO_GROUP_PKG_DIR.format(group),
             )
+
+
+def clear_key_request(iso_dir: str, mdata: Dict[str, Any]) -> None:
+    """
+    Remove the key request from the unpacked ISO.
+
+    :param iso_dir:
+        The directory in which the ISO has been unpacked.
+
+    :param mdata:
+        Iso metadata, as parsed json object returned from query content.
+
+    """
+    key_request_groups = gisoutils.get_groups_with_attr(
+        mdata["groups"], "key_packages"
+    )
+    for group in key_request_groups:
+        group_dir = os.path.join(
+            iso_dir, _isoformat.ISO_GROUP_PKG_DIR.format(group)
         )
-        _log.warning(msg)
-        print(f"WARNING: {msg}")
+        if os.path.exists(group_dir):
+            shutil.rmtree(group_dir)
+            _log.debug(
+                "Removed key requests '%s'",
+                _isoformat.ISO_GROUP_PKG_DIR.format(group),
+            )
+        else:
+            _log.debug(
+                "Could not find the %s directory, so have not attempted to delete any key packages",
+                _isoformat.ISO_GROUP_PKG_DIR.format(group),
+            )
 
 
 def remove_package(pkg: str, iso_dir: str, mdata: Dict[str, Any]) -> None:
@@ -672,12 +639,14 @@ def update_attr(attr: str, group: str, value: str, iso_dir: str) -> None:
             os.makedirs(attr_dir)
         try:
             with open(
-                os.path.join(attr_dir, "{}.attr.json".format(attr)), "r",
+                os.path.join(attr_dir, "{}.attr.json".format(attr)),
+                "r",
             ) as f:
                 attr_json = json.load(f)
             attr_json["value"] = value
             with open(
-                os.path.join(attr_dir, "{}.attr.json".format(attr)), "w",
+                os.path.join(attr_dir, "{}.attr.json".format(attr)),
+                "w",
             ) as f:
                 json.dump(attr_json, f, indent=4, sort_keys=True)
         except OSError as error:

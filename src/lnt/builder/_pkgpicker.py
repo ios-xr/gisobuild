@@ -443,12 +443,15 @@ def _add_blocks(
     for name, block_versions in additional_pkgs_blocks.items():
         if name in iso_pkgs_blocks:
             chosen_block = _choose_block_in_iso(
-                {**block_versions, **iso_pkgs_blocks[name]}, add_pkg_filenames,
+                {**block_versions, **iso_pkgs_blocks[name]},
+                add_pkg_filenames,
             )
             output_pkgs.add_block(chosen_block)
         else:
             chosen_block_not_in_iso = _choose_block_not_in_iso(
-                block_versions, add_pkg_filenames, add_pkg_res,
+                block_versions,
+                add_pkg_filenames,
+                add_pkg_res,
             )
 
             if chosen_block_not_in_iso is not None:
@@ -458,7 +461,8 @@ def _add_blocks(
 
 
 def _remove_blocks(
-    output_pkgs: _blocks.GroupedPackages, remove_pkgs: Sequence[str],
+    output_pkgs: _blocks.GroupedPackages,
+    remove_pkgs: Sequence[str],
 ) -> None:
     """
     Remove blocks from the output.
