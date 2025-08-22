@@ -1,22 +1,36 @@
 # -----------------------------------------------------------------------------
+# BSD 3-Clause License
+#
+# Copyright (c) 2021-2025, Cisco Systems, Inc. and its affiliates
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# 1. Redistributions of source code must retain the above copyright notice, this
+#    list of conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright notice,
+#    this list of conditions and the following disclaimer in the documentation
+#    and/or other materials provided with the distribution.
+#
+# 3. Neither the name of the [organization] nor the names of its contributors
+#    may be used to endorse or promote products derived from this software
+#    without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+# -----------------------------------------------------------------------------
 
-""" GISO YAML handling.
-
-Copyright (c) 2022 Cisco and/or its affiliates.
-This software is licensed to you under the terms of the Cisco Sample
-Code License, Version 1.1 (the "License"). You may obtain a copy of the
-License at
-
-        https://developer.cisco.com/docs/licenses
-
-All use of the material herein must be in accordance with the terms of
-the License. All rights not expressly granted by the License are
-reserved. Unless required by applicable law or agreed to separately in
-writing, software distributed under the License is distributed on an "AS
-IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
-or implied.
-
-"""
+"""GISO YAML handling."""
 
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, TextIO
@@ -44,6 +58,10 @@ class Packages:
     only_support_pids: Optional[List[str]]
     key_request: Optional[str]
     clear_key_request: bool
+    ownership_vouchers: Optional[str] = None
+    clear_ownership_vouchers: bool = False
+    ownership_certificate: Optional[str] = None
+    clear_ownership_certificate: bool = False
 
     @classmethod
     def from_dict(cls, ydict: Dict[str, Any]) -> "Packages":
@@ -62,6 +80,10 @@ class Packages:
         only_support_pids: Optional[List[str]] = None
         key_request: Optional[str] = None
         clear_key_request = False
+        ownership_vouchers: Optional[str] = None
+        clear_ownership_vouchers = False
+        ownership_certificate: Optional[str] = None
+        clear_ownership_certificate = False
 
         if ydict:
             iso = ydict.get("iso", "")
@@ -129,6 +151,16 @@ class Packages:
                 "clear-key-request", False
             ) or ydict.get("clear_key_request", False)
 
+            ownership_vouchers = ydict.get("ownership_vouchers", None)
+            clear_ownership_vouchers = ydict.get(
+                "clear_ownership_vouchers", False
+            )
+
+            ownership_certificate = ydict.get("ownership_certificate", None)
+            clear_ownership_certificate = ydict.get(
+                "clear_ownership_certificate", False
+            )
+
         return validate.create(
             cls,
             {
@@ -144,6 +176,10 @@ class Packages:
                 "only_support_pids": only_support_pids,
                 "key_request": key_request,
                 "clear_key_request": clear_key_request,
+                "ownership_vouchers": ownership_vouchers,
+                "clear_ownership_vouchers": clear_ownership_vouchers,
+                "ownership_certificate": ownership_certificate,
+                "clear_ownership_certificate": clear_ownership_certificate,
             },
         )
 

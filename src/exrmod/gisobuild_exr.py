@@ -1,22 +1,36 @@
 # -----------------------------------------------------------------------------
+# BSD 3-Clause License
+#
+# Copyright (c) 2021-2025, Cisco Systems, Inc. and its affiliates
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# 1. Redistributions of source code must retain the above copyright notice, this
+#    list of conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright notice,
+#    this list of conditions and the following disclaimer in the documentation
+#    and/or other materials provided with the distribution.
+#
+# 3. Neither the name of the [organization] nor the names of its contributors
+#    may be used to endorse or promote products derived from this software
+#    without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+# -----------------------------------------------------------------------------
 
-""" Wrapper around eXR gisobuild legacy workflow.
-
-Copyright (c) 2022 Cisco and/or its affiliates.
-This software is licensed to you under the terms of the Cisco Sample
-Code License, Version 1.1 (the "License"). You may obtain a copy of the
-License at
-
-        https://developer.cisco.com/docs/licenses
-
-All use of the material herein must be in accordance with the terms of
-the License. All rights not expressly granted by the License are
-reserved. Unless required by applicable law or agreed to separately in
-writing, software distributed under the License is distributed on an "AS
-IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
-or implied.
-
-"""
+"""Wrapper around eXR gisobuild legacy workflow."""
 
 from exrmod.gisobuild_exr_engine import *
 from utils import gisoutils
@@ -56,7 +70,7 @@ def system_resource_prep (args):
     return None
 
 def system_resource_check (args):
-    from distutils.spawn import find_executable
+    import shutil
     tools_check_err = False
     import_errors = False
     tools = GISOBUILD_PREREQ_EXECUTABLES
@@ -86,7 +100,7 @@ def system_resource_check (args):
 
     if not tools_check_err:
         for tool in tools:
-            executable_path = find_executable (tool)
+            executable_path = shutil.which(tool)
             found = executable_path is not None
             if not found:
                 logger.error("Error: Tool %s not found." % tool)
@@ -450,17 +464,21 @@ def main (argv, infile):
             giso.set_script(argv.script)
 
 
+        files_to_checksum = set()
         logger.info('\nBuilding Golden ISO...')
         result = giso.build_giso(rpm_db, argv.bundle_iso)
+        giso_dir = cwd
+        if result == -1:
+            logger.error('\n\t...Golden ISO creation FAILED.')
+            if argv.bes_logging:
+                bes.log("GISO build unsuccessful")
+            sys.exit(-1)
         # clean old giso rpms from repository
         if argv.gisoExtend:
            giso.do_extend_clean(giso.ExtendRpmRepository)
         rpm_db.cleanup_tmp_repo_path()
-        files_to_checksum = set()
         if hasattr(argv, 'optimize') and argv.optimize and argv.in_docker:
             giso_dir = (pathlib.Path(argv.out_directory).parent / ".signing_env").__str__()
-        else:
-            giso_dir = cwd
         if not result:
             logger.info('\n\t...Golden ISO creation SUCCESS.')
             logger.info('\nGolden ISO Image Location: %s/%s' %

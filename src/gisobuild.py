@@ -1,21 +1,37 @@
 #!/usr/bin/env python3
 # -----------------------------------------------------------------------------
+# BSD 3-Clause License
+#
+# Copyright (c) 2021-2025, Cisco Systems, Inc. and its affiliates
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# 1. Redistributions of source code must retain the above copyright notice, this
+#    list of conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright notice,
+#    this list of conditions and the following disclaimer in the documentation
+#    and/or other materials provided with the distribution.
+#
+# 3. Neither the name of the [organization] nor the names of its contributors
+#    may be used to endorse or promote products derived from this software
+#    without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+# -----------------------------------------------------------------------------
 
-""" Utility to build golden iso.
-
-Copyright (c) 2022-2023 Cisco and/or its affiliates.
-This software is licensed to you under the terms of the Cisco Sample
-Code License, Version 1.1 (the "License"). You may obtain a copy of the
-License at
-               https://developer.cisco.com/docs/licenses
-All use of the material herein must be in accordance with the terms of
-the License. All rights not expressly granted by the License are
-reserved. Unless required by applicable law or agreed to separately in
-writing, software distributed under the License is distributed on an "AS
-IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
-or implied.
-
-"""
+"""Utility to build golden iso."""
 
 import sys
 
@@ -88,10 +104,10 @@ def parsecli() -> Tuple[argparse.Namespace, argparse.ArgumentParser]:
         dest="repo",
         nargs="+",
         default=[],
-        help="Path to RPM repository. For LNT, user can "
-        "specify .rpm, .tgz, .tar filenames, or directories. "
-        "RPMs are only used if already included in the ISO, "
-        "or specified by the user via the --pkglist option.",
+        help="List of paths to RPM repositories. For LNT, user can specify "
+        ".rpm, .tgz, .tar filenames, or directories. RPMs are only used if "
+        "already included in the ISO, or specified by the user via the "
+        "--pkglist option.",
     )
 
     parser.add_argument(
@@ -100,8 +116,8 @@ def parsecli() -> Tuple[argparse.Namespace, argparse.ArgumentParser]:
         required=False,
         nargs="+",
         default=[],
-        help="Bridging rpms to package. "
-        "For EXR, takes from-release or rpm names; for LNT, the user can "
+        help="Bridging RPMs to package. "
+        "For EXR, takes from-release or RPM names; for LNT, the user can "
         "specify the same file types as for the --repo option.",
     )
 
@@ -125,7 +141,8 @@ def parsecli() -> Tuple[argparse.Namespace, argparse.ArgumentParser]:
     parser.add_argument(
         "--no-label",
         action="store_true",
-        help="Indicates that no label at all should be added to the GISO",
+        help="Indicates that no label should be added to the GISO, and any "
+        "existing label should be removed",
     )
 
     parser.add_argument(
@@ -133,7 +150,7 @@ def parsecli() -> Tuple[argparse.Namespace, argparse.ArgumentParser]:
         dest="out_directory",
         type=str,
         default=os.path.join(os.path.abspath(os.getcwd()), "output_gisobuild"),
-        help="Output Directory",
+        help="Directory to put all artifacts of the GISO build",
     )
 
     parser.add_argument(
@@ -145,7 +162,10 @@ def parsecli() -> Tuple[argparse.Namespace, argparse.ArgumentParser]:
     )
 
     parser.add_argument(
-        "--yamlfile", dest="cli_yaml", help="Cli arguments via yaml"
+        "--yamlfile",
+        dest="cli_yaml",
+        help="Cli arguments via yaml. See the files in ./sample_yaml/ for "
+        "examples",
     )
 
     parser.add_argument(
@@ -172,7 +192,7 @@ def parsecli() -> Tuple[argparse.Namespace, argparse.ArgumentParser]:
         default=[],
         help=(
             "Packages to be added to the output GISO. "
-            "For eXR: optional rpm or smu to package. "
+            "For eXR: optional RPM or SMU to package. "
             "For LNT: either full package filenames or package names for user "
             "installable packages can be specified. "
             "Full package filenames can be specified to choose a particular "
@@ -201,11 +221,12 @@ def parsecli() -> Tuple[argparse.Namespace, argparse.ArgumentParser]:
         "Pulls and run pre-built container image to build GISO. ",
     )
 
+    #  Output build environment security logs to console
     parser.add_argument(
         "--bes-logging",
         action="store_true",
         default=False,
-        help="Output build environment security logs to console",
+        help=argparse.SUPPRESS,
     )
 
     # EXR GISO build options.
@@ -215,8 +236,8 @@ def parsecli() -> Tuple[argparse.Namespace, argparse.ArgumentParser]:
         "--script",
         dest="script",
         type=str,
-        help="Path to user executable script "
-        "executed as part of bootup post activate.",
+        help="Path to user executable script, executed as part of boot, post "
+        "activate.",
     )
 
     exrgroup.add_argument(
@@ -232,8 +253,7 @@ def parsecli() -> Tuple[argparse.Namespace, argparse.ArgumentParser]:
         dest="x86_only",
         action="store_true",
         default=False,
-        help="Use only x86_64 rpms even if other "
-        "architectures are applicable.",
+        help="Only use x86_64 RPMs, even if other architectures are applicable.",
     )
 
     exrgroup.add_argument(
@@ -241,7 +261,7 @@ def parsecli() -> Tuple[argparse.Namespace, argparse.ArgumentParser]:
         dest="migration",
         action="store_true",
         default=False,
-        help="To build Migration tar only for ASR9k",
+        help="Build migration tar (only valid for ASR9k)",
     )
 
     if OPTIMIZE_CAPABLE:
@@ -258,7 +278,7 @@ def parsecli() -> Tuple[argparse.Namespace, argparse.ArgumentParser]:
             dest="fullISO",
             action="store_true",
             default=False,
-            help="To build full iso only for xrv9k",
+            help="Build full ISO (only valid for xrv9k)",
         )
 
     # LNT GISO build options.
@@ -290,9 +310,9 @@ def parsecli() -> Tuple[argparse.Namespace, argparse.ArgumentParser]:
         "--copy-dir",
         dest="copy_directory",
         type=str,
-        help="Copy built artefacts to specified directory if provided. The "
+        help="Copy built artifacts to specified directory if provided. The "
         "specified directory must already exist, be writable by the "
-        "builder and must not contain a previously built artefact with "
+        "builder and must not contain a previously built artifact with "
         "the same name.",
     )
     lntgroup.add_argument(
@@ -326,12 +346,11 @@ def parsecli() -> Tuple[argparse.Namespace, argparse.ArgumentParser]:
         help="User specified isoinfo executable to use instead of the "
         "default version",
     )
+    # User specified image.py script to be used for packing/unpacking instead of
+    # the version extracted from the ISO. It will not be inserted into the GISO.
+    # Intended for debugging purposes only.
     lntgroup.add_argument(
-        "--image-script",
-        dest="image_script",
-        help="User specified image.py script to be used for packing/unpacking "
-        "instead of the version extracted from the ISO. It will not be "
-        "inserted into the GISO. Intended for debugging purposes only.",
+        "--image-script", dest="image_script", help=argparse.SUPPRESS
     )
     lntgroup.add_argument(
         "--only-support-pids",
@@ -350,6 +369,32 @@ def parsecli() -> Tuple[argparse.Namespace, argparse.ArgumentParser]:
         "--clear-key-request",
         action="store_true",
         help="Remove all key requests from the input ISO",
+    )
+    lntgroup.add_argument(
+        "--ownership-vouchers",
+        dest="ownership_vouchers",
+        required=False,
+        help="Ownership vouchers to package to be used when validating owner "
+        "and partner RPMs.",
+    )
+    lntgroup.add_argument(
+        "--clear-ownership-vouchers",
+        action="store_true",
+        help="Remove all ownership vouchers from the input ISO, if there are "
+        "any present",
+    )
+    lntgroup.add_argument(
+        "--ownership-certificate",
+        dest="ownership_certificate",
+        required=False,
+        help="Ownership certificate to package to be used when validating "
+        "owner and partner RPMs.",
+    )
+    lntgroup.add_argument(
+        "--clear-ownership-certificate",
+        action="store_true",
+        help="Remove the ownership certificate from the input ISO, if there is "
+        "one present",
     )
     lntgroup.add_argument(
         "--no-buildinfo",
@@ -466,6 +511,10 @@ def validate_and_setup_args(args: argparse.Namespace) -> argparse.Namespace:
             raise AssertionError(
                 "Init script {} does not exist.".format(args.script)
             )
+        if not os.access(args.script, os.X_OK):
+            raise AssertionError(
+                "Init script {} is not executable.".format(args.script)
+            )
         filetype = gisoutils.get_file_type(args.script)
         args.script = os.path.abspath(args.script)
         if filetype != gisoglobals.FILE_TYPE_TEXT:
@@ -515,6 +564,40 @@ def validate_and_setup_args(args: argparse.Namespace) -> argparse.Namespace:
         if not os.path.exists(args.key_request):
             raise AssertionError(
                 f"Error: The given key request does not exist: {args.key_request}"
+            )
+
+    if args.ownership_vouchers:
+        if not os.path.exists(args.ownership_vouchers):
+            raise AssertionError(
+                "Error: The given ownership vouchers file ("
+                + args.ownership_vouchers
+                + ") does not exist."
+            )
+        elif not (
+            args.ownership_vouchers.endswith(
+                (".vcj", ".tar", ".tar.gz", ".tgz")
+            )
+        ):
+            raise AssertionError(
+                "Error: The given ownership vouchers file ("
+                + args.ownership_vouchers
+                + ") is not a valid file format. It should be either a .vcj or "
+                "a tarball (.tar, .tar.gz, .tgz)."
+            )
+
+    if args.ownership_certificate:
+        if not os.path.exists(args.ownership_certificate):
+            raise AssertionError(
+                "Error: The given ownership certificate file ("
+                + args.ownership_certificate
+                + ") does not exist."
+            )
+        elif not args.ownership_certificate.endswith(".cms"):
+            raise AssertionError(
+                "Error: The given ownership certificate file ("
+                + args.ownership_certificate
+                + ") is not a valid "
+                "file format. It should be a .cms file."
             )
     return args
 

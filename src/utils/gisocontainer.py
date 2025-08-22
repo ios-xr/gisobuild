@@ -1,22 +1,36 @@
 # -----------------------------------------------------------------------------
+# BSD 3-Clause License
+#
+# Copyright (c) 2022-2025, Cisco Systems, Inc. and its affiliates
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# 1. Redistributions of source code must retain the above copyright notice, this
+#    list of conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright notice,
+#    this list of conditions and the following disclaimer in the documentation
+#    and/or other materials provided with the distribution.
+#
+# 3. Neither the name of the [organization] nor the names of its contributors
+#    may be used to endorse or promote products derived from this software
+#    without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+# -----------------------------------------------------------------------------
 
-""" Launch a GISO build in a container.
-
-Copyright (c) 2022-2023 Cisco and/or its affiliates.
-This software is licensed to you under the terms of the Cisco Sample
-Code License, Version 1.1 (the "License"). You may obtain a copy of the
-License at
-
-        https://developer.cisco.com/docs/licenses
-
-All use of the material herein must be in accordance with the terms of
-the License. All rights not expressly granted by the License are
-reserved. Unless required by applicable law or agreed to separately in
-writing, software distributed under the License is distributed on an "AS
-IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
-or implied.
-
-"""
+""" Launch a GISO build in a container."""
 
 __all__ = (
     "execute_build",
@@ -38,6 +52,7 @@ import sys
 import tempfile
 import types
 import typing
+from subprocess import CalledProcessError
 from typing import Dict, Iterator, List, NoReturn, Optional, Tuple
 
 from . import bes
@@ -86,12 +101,12 @@ def eXR_fix_staging_location(
 
 def _print_error(line: str) -> None:
     """Print a line of error output."""
+    logger.debug(line)
     print(line, file=sys.stderr)
 
 
 def _fatal_error(*msgs: str, prefix: str = "Error: ") -> NoReturn:
     """Exit with an error message."""
-    logger.critical("Fatal error: %s", "\n".join(msgs))
     for msg in msgs:
         _print_error(f"{prefix}{msg}")
     sys.exit(1)
@@ -112,6 +127,7 @@ def _fatal_error_from_subprocess(
     cmd = " ".join(error.cmd)
     _fatal_error(
         f"{description} '{cmd}' failed with exit code {error.returncode}",
+        *error.stdout.splitlines(),
         *error.stderr.splitlines(),
     )
 
@@ -145,17 +161,44 @@ def unify_staging(
     Aggregates package files from multiple repo(s) into one location and sets
     correct access rights inorder to make it accessible inside docker container.
     """
+    acceptable_file_extentions = (".rpm", ".tar", ".tgz")
     unified_staging = None
     # {pkgname: pkg_filepath}
     unified_pkgs = {}
     for repo in cli_args.repo:
         repo = os.path.normpath(repo)
         logger.info("Scanning: %s", repo)
-        acceptable_file_extentions = ["rpm", "tar", "tgz"]
         for ext in acceptable_file_extentions:
-            for r_file in glob.glob(os.path.join(repo, f"*.{ext}")):
+            for r_file in glob.glob(os.path.join(repo, f"*{ext}")):
                 unified_pkgs.update({os.path.basename(r_file): r_file})
-
+    if cli_args.exriso and cli_args.bridge_fixes:
+        # If bridge fixes are provided, we need to copy them to the unified
+        # staging location.
+        for bridge_fix in cli_args.bridge_fixes:
+            if not bridge_fix.endswith(acceptable_file_extentions):
+                logger.debug(
+                    "The input %s is probably a DDTS ID or IOS-XR version, skip it.",
+                    bridge_fix,
+                )
+                continue
+            if os.path.basename(bridge_fix) in unified_pkgs:
+                # If the bridge fix is already in the unified_pkgs, we can skip
+                # copying it again.
+                logger.debug(
+                    "Bridge fix %s already in unified staging, skipping.",
+                    bridge_fix,
+                )
+            elif os.path.exists(bridge_fix):
+                unified_pkgs.update({os.path.basename(bridge_fix): bridge_fix})
+            else:
+                _fatal_error(
+                    "Bridge fix file %s does not exist! Aborting!"
+                    % (bridge_fix)
+                )
+        cli_args.bridge_fixes = [
+            os.path.basename(bridge_fix)
+            for bridge_fix in cli_args.bridge_fixes
+        ]
     if len(unified_pkgs):
         unified_staging = tempfile.TemporaryDirectory(
             prefix="UNIFIED_REPO-", dir=cli_args.out_directory
@@ -428,10 +471,22 @@ def _build_giso(
         src_dir = _find_dockerfile().parents[1]
         o_path = pathlib.Path(__file__).parents[3] / "exr"
         if str(o_path) not in sys.path:
+            sys.path.append(str(o_path.parent))
             sys.path.append(str(o_path))
         import exr  # pylint: disable=import-error
 
-        return exr.runCubesGISOBuild(src_dir.__str__(), infile, args)
+        try:
+            return exr.runCubesGISOBuild(src_dir.__str__(), infile, args)
+        except CalledProcessError as cpe:
+            logger.error(
+                "[FAILED][RC:%d]: %s\n[STDOUT]: %s\n[STDERR]: %s\n",
+                cpe.returncode,
+                cpe.cmd,
+                cpe.output.decode(),
+                cpe.stderr.decode(),
+            )
+            _fatal_error_from_subprocess("GISO build", cpe)
+            return "", ""
 
     src_dir = _find_dockerfile().parent / "src"
     giso_build_cmd = []
@@ -558,11 +613,13 @@ def _execute_build(cli_args: argparse.Namespace) -> None:
     image = _ensure_image()
     logger.info("Container Image: %s", image)
     container_name = _gen_container_name()
+    is_success = False
     try:
         container.setup_copy_out_directory(cli_args)
         logger.info("\nRunning GISO build...")
         gisoutils.display_progress()
         system_build_main(container_name, cli_args, infile, image)
+        is_success = True
     except Exception:
         logger.exception("\nGiso Build failed. Stage error logs if available.")
     finally:
@@ -585,7 +642,12 @@ def _execute_build(cli_args: argparse.Namespace) -> None:
         if img_dir:
             _CTR_OUTPUT_DIR = os.path.basename(_CTR_OUT_DIR)
             src_dir = pathlib.Path(os.path.join(img_dir, _CTR_OUTPUT_DIR))
-            container.copy_artefacts(src_dir, log_dir, out_dir, copy_dir)
+            if cli_args.exriso:
+                container.copy_artefacts(
+                    src_dir, log_dir, out_dir, copy_dir, is_success
+                )
+            else:
+                container.copy_artefacts(src_dir, log_dir, out_dir, copy_dir)
     except Exception:
         logger.exception("Exiting with an unhandled error:")
         logger.warning(

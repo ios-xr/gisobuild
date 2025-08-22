@@ -1,32 +1,50 @@
 # -----------------------------------------------------------------------------
+# BSD 3-Clause License
+#
+# Copyright (c) 2021-2025, Cisco Systems, Inc. and its affiliates
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# 1. Redistributions of source code must retain the above copyright notice, this
+#    list of conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright notice,
+#    this list of conditions and the following disclaimer in the documentation
+#    and/or other materials provided with the distribution.
+#
+# 3. Neither the name of the [organization] nor the names of its contributors
+#    may be used to endorse or promote products derived from this software
+#    without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+# -----------------------------------------------------------------------------
 
-""" APIs used to modify the unpacked ISO.
-
-Copyright (c) 2022 Cisco and/or its affiliates.
-This software is licensed to you under the terms of the Cisco Sample
-Code License, Version 1.1 (the "License"). You may obtain a copy of the
-License at
-
-        https://developer.cisco.com/docs/licenses
-
-All use of the material herein must be in accordance with the terms of
-the License. All rights not expressly granted by the License are
-reserved. Unless required by applicable law or agreed to separately in
-writing, software distributed under the License is distributed on an "AS
-IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
-or implied.
-
-"""
+"""APIs used to modify the unpacked ISO."""
 
 __all__ = (
     # APIs
     "add_package",
     "add_rpm",
-    "add_keys",
+    "add_key_request",
+    "add_ownership_vouchers",
+    "add_ownership_certificate",
     "add_bridging_bugfix",
     "get_zipped_and_unzipped_rpms",
     "remove_package",
     "clear_key_request",
+    "clear_ownership_vouchers",
+    "clear_ownership_certificate",
     # Exceptions
     "ItemToAddNotSpecifiedError",
     "CopyPkgError",
@@ -487,12 +505,12 @@ def add_rpm(pkg: str, iso_dir: str, group: _isoformat.PackageGroup) -> None:
     add_package(iso_dir, pkg=pkg, group=group)
 
 
-def add_keys(pkg: str, iso_dir: str) -> None:
+def add_key_request(iso_dir: str, pkg: str) -> None:
     """
-    Add a key package to the unpacked ISO
+    Add a key request to the unpacked ISO
 
     :param pkg:
-        The key package to add to the keys group
+        The key request to add to the keys group
 
     :param iso_dir:
         The directory in which the ISO has been unpacked and to add the package
@@ -501,6 +519,41 @@ def add_keys(pkg: str, iso_dir: str) -> None:
     """
 
     add_package(iso_dir, pkg=pkg, group=_isoformat.PackageGroup.KEY_PKGS)
+
+
+def add_ownership_vouchers(iso_dir: str, pkg: str) -> None:
+    """
+    Add an ownership voucher to the unpacked ISO
+
+    :param pkg:
+        The ownership voucher package to add to the ownership vouchers group.
+
+    :param iso_dir:
+        The directory in which the ISO has been unpacked and to add the package
+        to.
+
+    """
+    add_package(
+        iso_dir, pkg=pkg, group=_isoformat.PackageGroup.OWNERSHIP_VOUCHERS
+    )
+
+
+def add_ownership_certificate(iso_dir: str, pkg: str) -> None:
+    """
+    Add an ownership certificate to the unpacked ISO
+
+    :param pkg:
+        The ownership certificate package to add to the ownership certificate
+        group.
+
+    :param iso_dir:
+        The directory in which the ISO has been unpacked and to add the package
+        to.
+
+    """
+    add_package(
+        iso_dir, pkg=pkg, group=_isoformat.PackageGroup.OWNERSHIP_CERTIFICATE
+    )
 
 
 def add_bridging_bugfix(pkg: str, iso_dir: str) -> None:
@@ -576,6 +629,68 @@ def clear_key_request(iso_dir: str, mdata: Dict[str, Any]) -> None:
         else:
             _log.debug(
                 "Could not find the %s directory, so have not attempted to delete any key packages",
+                _isoformat.ISO_GROUP_PKG_DIR.format(group),
+            )
+
+
+def clear_ownership_vouchers(iso_dir: str, mdata: Dict[str, Any]) -> None:
+    """
+    Remove the ownership vouchers from the unpacked ISO.
+
+    :param iso_dir:
+        The directory in which the ISO has been unpacked.
+
+    :param mdata:
+        Iso metadata, as parsed json object returned from query content.
+
+    """
+    ownership_vouchers_groups = gisoutils.get_groups_with_attr(
+        mdata["groups"], "ownership_vouchers"
+    )
+    for group in ownership_vouchers_groups:
+        group_dir = os.path.join(
+            iso_dir, _isoformat.ISO_GROUP_PKG_DIR.format(group)
+        )
+        if os.path.exists(group_dir):
+            shutil.rmtree(group_dir)
+            _log.debug(
+                "Removed ownership vouchers '%s'",
+                _isoformat.ISO_GROUP_PKG_DIR.format(group),
+            )
+        else:
+            _log.debug(
+                "Could not find the %s directory, so have not attempted to delete any ownership vouchers",
+                _isoformat.ISO_GROUP_PKG_DIR.format(group),
+            )
+
+
+def clear_ownership_certificate(iso_dir: str, mdata: Dict[str, Any]) -> None:
+    """
+    Remove the ownership certificate from the unpacked ISO.
+
+    :param iso_dir:
+        The directory in which the ISO has been unpacked.
+
+    :param mdata:
+        Iso metadata, as parsed json object returned from query content.
+
+    """
+    ownership_certificate_groups = gisoutils.get_groups_with_attr(
+        mdata["groups"], "ownership_certificate"
+    )
+    for group in ownership_certificate_groups:
+        group_dir = os.path.join(
+            iso_dir, _isoformat.ISO_GROUP_PKG_DIR.format(group)
+        )
+        if os.path.exists(group_dir):
+            shutil.rmtree(group_dir)
+            _log.debug(
+                "Removed ownership certificate '%s'",
+                _isoformat.ISO_GROUP_PKG_DIR.format(group),
+            )
+        else:
+            _log.debug(
+                "Could not find the %s directory, so have not attempted to delete any ownership certificates",
                 _isoformat.ISO_GROUP_PKG_DIR.format(group),
             )
 

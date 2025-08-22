@@ -1,22 +1,36 @@
 # -----------------------------------------------------------------------------
+# BSD 3-Clause License
+#
+# Copyright (c) 2021-2025, Cisco Systems, Inc. and its affiliates
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# 1. Redistributions of source code must retain the above copyright notice, this
+#    list of conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright notice,
+#    this list of conditions and the following disclaimer in the documentation
+#    and/or other materials provided with the distribution.
+#
+# 3. Neither the name of the [organization] nor the names of its contributors
+#    may be used to endorse or promote products derived from this software
+#    without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+# -----------------------------------------------------------------------------
 
-""" Tool to coordinate the building of the GISO.
-
-Copyright (c) 2022 Cisco and/or its affiliates.
-This software is licensed to you under the terms of the Cisco Sample
-Code License, Version 1.1 (the "License"). You may obtain a copy of the
-License at
-
-        https://developer.cisco.com/docs/licenses
-
-All use of the material herein must be in accordance with the terms of
-the License. All rights not expressly granted by the License are
-reserved. Unless required by applicable law or agreed to separately in
-writing, software distributed under the License is distributed on an "AS
-IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
-or implied.
-
-"""
+"""Tool to coordinate the building of the GISO."""
 
 __all__ = (
     "run",
@@ -25,6 +39,7 @@ __all__ = (
 
 import argparse
 import copy
+import glob
 import itertools
 import json
 import logging
@@ -32,10 +47,13 @@ import math
 import os
 import re
 import shutil
+import subprocess
 import sys
+import tarfile
 import tempfile
 from collections import defaultdict
 from functools import cmp_to_key
+from pathlib import Path
 from typing import (
     Any,
     Dict,
@@ -51,6 +69,7 @@ from typing import (
 from utils import bes
 from utils import gisoglobals as gglobals
 from utils import gisoutils as ggisoutils
+from utils import subprocs
 
 from .. import gisoutils, image
 from .. import lnt_gisoglobals as gisoglobals
@@ -72,6 +91,10 @@ _MIN_XR_VERSION_FOR_OWNER_PARTNER = "7.11.1"
 # owner and partner packages and the version that added the image.py capability
 # that indicates they are supported.
 _XR_VERSIONS_FOR_OWNER_PARTNER_BEFORE_CAP = ("7.11.", "24.", "25.1.1")
+
+# First XR version that supported specifying Ownership Vouchers and Ownership
+# Certificates.
+_MIN_XR_VERSION_FOR_OV_OC = "25.4.1"
 
 ###############################################################################
 #                               Custom exceptions                             #
@@ -214,7 +237,7 @@ class InvalidPkgsError(Exception):
             archs_str = ", ".join(sorted(iso_archs))
             lines.append(
                 "The following XR packages have a different architecture to "
-                f"the input ISO (expected {archs_str}):"
+                f"the input ISO (expected one of {archs_str}):"
             )
             for pkg in sorted(invalid_arch_pkgs, key=str):
                 lines.append(f"  {str(pkg)} has arch {pkg.arch}")
@@ -237,6 +260,18 @@ class InvalidPkgsError(Exception):
         super().__init__("\n".join(lines))
 
 
+class OVOCNotSupportedError(Exception):
+    """Error if the input ISO does not support OVs or OCs"""
+
+    def __init__(self, iso_version: str) -> None:
+        """Initialise an OVOCNotSupportedError"""
+        super().__init__(
+            "Ownership Vouchers and Ownership Certificates cannot be added to "
+            "ISOs with XR versions before "
+            f"{_MIN_XR_VERSION_FOR_OV_OC}. An ISO with version {iso_version} was provided."
+        )
+
+
 class InvalidBugfixesError(Exception):
     """Error if there are invalid bugfixes."""
 
@@ -245,7 +280,7 @@ class InvalidBugfixesError(Exception):
         partner_packages: Set[_packages.Package],
         owner_packages: Set[_packages.Package],
         invalid_arch_pkgs: Set[_packages.Package],
-        iso_arch: str,
+        iso_archs: Set[str],
     ) -> None:
         """
         Initialize the class.
@@ -259,8 +294,8 @@ class InvalidBugfixesError(Exception):
         :param invalid_arch_pkgs:
             The packages with invalid architecture.
 
-        :param iso_arch:
-            The architectures of the rpms in the input iso.
+        :param iso_archs:
+            The set of architectures of the packages in the input ISO.
 
         """
         assert any([partner_packages, owner_packages, invalid_arch_pkgs])
@@ -282,7 +317,8 @@ class InvalidBugfixesError(Exception):
         if invalid_arch_pkgs:
             lines.append(
                 "The following bugfix packages have a different architecture "
-                f"to the input ISO (expected {iso_arch}):"
+                "to the input ISO (expected one of "
+                f"{', '.join(sorted(iso_archs))}):"
             )
             for pkg in sorted(invalid_arch_pkgs, key=str):
                 lines.append(f"  {str(pkg)} has arch {pkg.arch}")
@@ -324,6 +360,18 @@ class ReqPackageBeingRemovedError(Exception):
         super().__init__(
             "The following packages were requested to be removed, but they "
             "are required: {}".format(" ".join(pkgs))
+        )
+
+
+class FailedFindPlatformObjectError(Exception):
+    """Failed to replace the specified platform object during the GISO build."""
+
+    def __init__(self, platform_object: str) -> None:
+        """Initialise a FailedFindPlatformObjectError"""
+        super().__init__(
+            "Failed to replace the '{}' platform object during the GISO build.".format(
+                platform_object
+            )
         )
 
 
@@ -387,6 +435,24 @@ class BadPIDClassesError(Exception):
         )
 
         super().__init__(f"{top_msg}\n{_format_pid_types(pid_types)}")
+
+
+class OVOCMismatchError(Exception):
+    """The input ISO contains either Ownership Vouchers or Ownership
+    Certificates, but not both."""
+
+    def __init__(self, ov: bool = False, oc: bool = False) -> None:
+        """Initialise an OVOCMismatchError"""
+        assert ov is not oc
+        super().__init__(
+            "The input ISO must contain Ownership Vouchers and an "
+            "Ownership Certificate or neither. Only {} provided by the "
+            "CLI and the input ISO.".format(
+                "Ownership Vouchers were"
+                if ov
+                else "an Ownership Certificate was"
+            )
+        )
 
 
 ###############################################################################
@@ -635,7 +701,7 @@ def _get_package_info_from_groups(
     rpms = [
         rpm for group in groups for rpm in _file.get_group_rpms(iso_dir, group)
     ]
-    package_mapping = _packages.get_packages_from_rpm_files(rpms)
+    package_mapping = _packages.get_packages_from_rpm_files(sorted(rpms))
     rpm_mapping = {
         str(package): rpm for rpm, package in package_mapping.items()
     }
@@ -732,7 +798,7 @@ def _coordinate_bridging(
     iso_dir: str,
     tmp_dir: str,
     iso_version: str,
-    iso_arch: str,
+    iso_archs: Set[str],
 ) -> None:
     """
     Co-ordinate addition of bridging RPMs
@@ -755,8 +821,8 @@ def _coordinate_bridging(
     :param iso_version:
         XR version of the input ISO.
 
-    :param iso_arch:
-        Architecture of the input ISO.
+    :param iso_archs:
+        The set of architectures of the packages in the input ISO.
 
     """
     # Retrieve set of bridging RPMs already within the input GISO
@@ -774,7 +840,9 @@ def _coordinate_bridging(
     packages_to_add = []
     add_rpm_mapping = {}
     version_errors = set()
-    rpms_to_packages = _packages.get_packages_from_rpm_files(rpms_to_add)
+    rpms_to_packages = _packages.get_packages_from_rpm_files(
+        sorted(rpms_to_add)
+    )
     for rpm, package in rpms_to_packages.items():
         if package.version.xr_version == iso_version:
             version_errors.add(rpm)
@@ -783,7 +851,7 @@ def _coordinate_bridging(
     if version_errors:
         raise BridgingIsoVersionError(version_errors, iso_version)
 
-    _check_invalid_bugfixes(packages_to_add, iso_arch)
+    _check_invalid_bugfixes(packages_to_add, iso_archs)
 
     bridging_blocks = _blocks.group_packages(base_packages + packages_to_add)
 
@@ -874,15 +942,20 @@ def _check_invalid_pkgs(
         If there are any invalid packages.
 
     """
-    different_xr_version_pkgs = set()
+    # @@@ Typing added for different_xr_version_pkgs because the code that
+    # populates it was commented out until CSCwq44598 is addressed and so
+    # the type could not be derived by the linting tools.
+    different_xr_version_pkgs: Set[_packages.Package] = set()
     pre_supported_version_owner_pkgs = set()
     pre_supported_version_partner_pkgs = set()
     different_arch_pkgs = set()
     for pkg in pkgs:
-        # Only check XR version of this is an XR package (rather than third
+        # @@@ Re-enable this code as part of addressing CSCwq44598
+        #
+        # Only check XR version if this is an XR package (rather than third
         # party).
-        if _blocks.is_xr_pkg(pkg) and pkg.version.xr_version != iso_version:
-            different_xr_version_pkgs.add(pkg)
+        # if _blocks.is_xr_pkg(pkg) and pkg.version.xr_version != iso_version:
+        #    different_xr_version_pkgs.add(pkg)
         if pkg.is_owner_package and not supports_owner_partner_packages:
             pre_supported_version_owner_pkgs.add(pkg)
         if pkg.is_partner_package and not supports_owner_partner_packages:
@@ -909,7 +982,7 @@ def _check_invalid_pkgs(
 
 
 def _check_invalid_bugfixes(
-    bugfixes: Iterable[_packages.Package], iso_arch: str
+    bugfixes: Iterable[_packages.Package], iso_archs: Set[str]
 ) -> None:
     """
     Check if the given bugfixes are valid.
@@ -917,8 +990,8 @@ def _check_invalid_bugfixes(
     :param: bugfixes:
         The collection of bugfixes to check.
 
-    :param iso_arch:
-        The architecture of the input ISO.
+    :param iso_archs:
+        The set of architectures of the packages in the input ISO.
 
     :raises InvalidBugfixesError:
         If there are any invalid bugfixes.
@@ -926,21 +999,18 @@ def _check_invalid_bugfixes(
     """
     partner_packages = set()
     owner_packages = set()
-    different_arch_pkgs = set()
     for pkg in bugfixes:
         if pkg.is_partner_package:
             partner_packages.add(pkg)
         if pkg.is_owner_package:
             owner_packages.add(pkg)
-        if pkg.arch != iso_arch:
-            different_arch_pkgs.add(pkg)
 
-    if any([partner_packages, owner_packages, different_arch_pkgs]):
+    if any([partner_packages, owner_packages]):
         raise InvalidBugfixesError(
             partner_packages,
             owner_packages,
-            different_arch_pkgs,
-            iso_arch,
+            set(),  # Don't error on invalid architectures for bridging SMUs.
+            iso_archs,
         )
 
 
@@ -974,6 +1044,126 @@ def _validate_pid_selection(
     )
     if rp_in_selection != lc_in_selection:
         raise BadPIDClassesError(rp_in_selection, pid_types)
+
+
+def _replace_sim_cfg(iso: image.Image, out_dir: str) -> None:
+    """
+    Attempts to replace the sim_cfg.yml file in the given ISO with the
+    version from the block it is a part of, if it can be found in the
+    given RPMs.
+
+    :param iso:
+        The input ISO to replace the sim_cfg.yml file in.
+    :param out_dir:
+        The output directory for the GISO build.
+    """
+    sim_cfg_file = "sim_cfg.yml"
+
+    try:
+        block, sim_cfg_packaged_path = iso.find_platform_object(
+            sim_cfg_file
+        ).split(",")
+    except image.CapabilityNotSupported:
+        _log.debug(
+            "The given ISO does not support automatically updating the "
+            "%s file. Proceeding with the GISO build without "
+            "updating this file.",
+            sim_cfg_file,
+        )
+        return
+    except ValueError as exc:
+        _log.debug(
+            "Failed to get block from ISO: %s. Proceeding with the GISO build "
+            "without updating the %s file.",
+            exc.args[0],
+            sim_cfg_file,
+        )
+        return
+
+    rpm_loc = Path(out_dir) / "groups/group.main/packages/"
+    rpm_pattern = f"{block}-*.rpm"
+    rpms: List[str] = [str(r) for r in rpm_loc.glob(rpm_pattern)]
+
+    rpm = ""
+    for _rpm in rpms:
+        rpm_output = subprocs.execute(["rpm", "-ql", _rpm])[0]
+        if sim_cfg_file in rpm_output:
+            rpm = _rpm
+            break
+
+    if not rpm:
+        _log.exception(
+            "The %s file could not be located in the given bugfix. ",
+            sim_cfg_file,
+        )
+        raise FailedFindPlatformObjectError(sim_cfg_file)
+
+    try:
+        sim_cfg_packaged_path = sim_cfg_packaged_path.strip()
+        sim_cfg_regex = "." + sim_cfg_packaged_path
+        cmd = ["rpm2cpio", rpm]
+        _log.info("Extracting files from %s matching %s", rpm, sim_cfg_regex)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            rpm_proc = subprocess.run(
+                cmd,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            cpio_cmd = ["cpio", "-idmv", sim_cfg_regex]
+            cpio_proc = subprocess.run(
+                cpio_cmd,
+                check=True,
+                input=rpm_proc.stdout,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                cwd=tmp_dir,
+            )
+            output = cpio_proc.stdout.decode("utf8")
+            if output:
+                # The packaged path may start with a "/" but to join it on to
+                # temporary directory path we need to strip that or the join
+                # will ignore the first input.
+                extracted_file = os.path.join(
+                    tmp_dir, sim_cfg_packaged_path.lstrip("/")
+                )
+                if os.path.exists(extracted_file):
+                    shutil.move(extracted_file, f"{out_dir}/misc/sim_cfg.yml")
+                else:
+                    raise FileNotFoundError(
+                        f"Could not locate file expected from cpio output in {extracted_file}:\n{output}"
+                    )
+            else:
+                raise ValueError(
+                    f"Failed to find {sim_cfg_file} in the given RPM.",
+                )
+    except Exception as exc:
+        _log.error(
+            "Failed to extract file %s from rpm %s",
+            sim_cfg_file,
+            rpm,
+        )
+        raise FailedFindPlatformObjectError(sim_cfg_file) from exc
+
+
+def _validate_ovs_and_oc(iso_dir: str) -> None:
+    """Check that the input ISO either contains both OVs and an OC, or
+    neither."""
+
+    ov_dir = _file.get_group_package_dir(
+        iso_dir,
+        _isoformat.PackageGroup.OWNERSHIP_VOUCHERS.group_name,  # pylint: disable=no-member
+    )
+    oc_dir = _file.get_group_package_dir(
+        iso_dir,
+        _isoformat.PackageGroup.OWNERSHIP_CERTIFICATE.group_name,  # pylint: disable=no-member
+    )
+
+    ov_present = bool(os.path.exists(ov_dir) and os.listdir(ov_dir))
+    oc_present = bool(os.path.exists(oc_dir) and os.listdir(oc_dir))
+    if (ov_present and not oc_present) or (oc_present and not ov_present):
+        raise OVOCMismatchError(ov=ov_present, oc=oc_present)
 
 
 def _coordinate_pkgs(
@@ -1037,10 +1227,20 @@ def _coordinate_pkgs(
         _log.debug("  %s", str(pkg))
 
     _log.debug("Getting repo packages")
-    repo_pkg_paths = _get_rpms("group", repo, tmp_dir)
+
+    all_packages = set(repo)
+    for repo_dir in repo:
+        all_packages |= {
+            f
+            for f in glob.glob(
+                os.path.join(repo_dir, "**", "*.rpm"), recursive=True
+            )
+            if f
+        }
+    repo_pkg_paths = _get_rpms("group", list(all_packages), tmp_dir)
     repo_dirs = [os.path.dirname(p) for p in repo_pkg_paths]
     repo_pkgs = list(
-        _packages.get_packages_from_rpm_files(repo_pkg_paths).values()
+        _packages.get_packages_from_rpm_files(sorted(repo_pkg_paths)).values()
     )
     _log.debug("Packages in the repos:")
     for pkg in sorted(repo_pkgs, key=str):
@@ -1125,6 +1325,84 @@ def _supports_owner_partner_packages(
     )
 
 
+def _supports_oc_ov(iso: image.Image) -> bool:
+    """
+    Determine whether the ISO supports specifying Ownership Certificates and
+    Ownership Vouchers.
+
+    :param iso:
+        The image object representing the ISO.
+
+    :param iso_version:
+        The XR version of the ISO.
+
+    :returns:
+        True if the ISO supports specifying Ownership Certificates and Ownership
+        Vouchers; False otherwise.
+    """
+    return iso.supports("get-ownership-certificate") and iso.supports(
+        "get-ownership-vouchers"
+    )
+
+
+def _pack_ownership_vouchers(ownership_vouchers: str, out_dir: str) -> None:
+    """
+    Combine OVs already included in the GISO with the input ones and pack them
+    into a tarball and add them to the output directory.
+
+    :param ownership_vouchers:
+        Ownership vouchers specified via the CLI.
+
+    :param out_dir:
+        Path to the output directory where the GISO is built.
+    """
+    with tempfile.TemporaryDirectory() as tmp_ov_dir:
+        vcj_dir = os.path.join(tmp_ov_dir, "vcj")
+        os.makedirs(vcj_dir, exist_ok=True)
+
+        # Move existing OVs to tmpdir/vcj/ and extract them
+        giso_tar_file = os.path.join(
+            out_dir,
+            _isoformat.ISO_GROUP_PKG_DIR.format(
+                _isoformat.PackageGroup.OWNERSHIP_VOUCHERS.group_name  # pylint: disable=no-member
+            ),
+            "*.tar",
+        )
+        if os.path.exists(giso_tar_file):
+            with tarfile.open(giso_tar_file, "r") as tar:
+                tar.extractall(path=vcj_dir)
+            _log.debug(
+                "Extracted existing ownership vouchers from %s to %s",
+                giso_tar_file,
+                vcj_dir,
+            )
+
+        # If input is a vcj, copy it to tmpdir/vcj/
+        if ownership_vouchers.endswith(".vcj"):
+            shutil.copy2(ownership_vouchers, vcj_dir)
+            _log.debug("Copied input ownership vouchers to %s", vcj_dir)
+        # If input is a tarball, extract it to tmpdir/vcj/
+        else:
+            if ownership_vouchers.endswith(".tar"):
+                with tarfile.open(ownership_vouchers, "r") as tar:
+                    tar.extractall(path=vcj_dir)
+            elif ownership_vouchers.endswith((".tar.gz", ".tgz")):
+                with tarfile.open(ownership_vouchers, "r:gz") as tar:
+                    tar.extractall(path=vcj_dir)
+            _log.debug("Extracted input ownership vouchers to %s", vcj_dir)
+
+        # Compress files in tmpdir/vcj/ to a single tar file in tmpdir/
+        ov_tar = os.path.join(tmp_ov_dir, "ov.tar")
+        with tarfile.open(ov_tar, "w") as tar:
+            tar.add(vcj_dir, arcname=".")
+        _log.debug("Created tar file of ownership vouchers at %s", ov_tar)
+
+        _file.add_ownership_vouchers(
+            out_dir,
+            pkg=ov_tar,
+        )
+
+
 def _coordinate_giso(
     args: argparse.Namespace, tmp_dir: str, log_dir: str
 ) -> Tuple[str, Optional[str]]:
@@ -1207,6 +1485,9 @@ def _coordinate_giso(
         _supports_owner_partner_packages(iso_image, iso_version),
     )
 
+    if mdata["platform-family"] == "8000":
+        _replace_sim_cfg(iso_image, out_dir)
+
     # If key requests are to be removed or added, remove existing ones before
     # adding new ones.
     if args.clear_key_request or args.key_request:
@@ -1214,11 +1495,38 @@ def _coordinate_giso(
 
     # Add key requests
     if args.key_request:
-        _file.add_package(
+        _file.add_key_request(
             out_dir,
             pkg=args.key_request,
-            group=_isoformat.PackageGroup.KEY_PKGS,
         )
+
+    if any(
+        [
+            args.ownership_vouchers,
+            args.clear_ownership_vouchers,
+            args.ownership_certificate,
+            args.clear_ownership_certificate,
+        ]
+    ):
+        if not _supports_oc_ov(iso_image):
+            raise OVOCNotSupportedError(iso_version)
+
+    if args.clear_ownership_vouchers:
+        _file.clear_ownership_vouchers(out_dir, iso_content)
+
+    if args.ownership_vouchers:
+        _pack_ownership_vouchers(args.ownership_vouchers, out_dir)
+
+    if args.clear_ownership_certificate or args.ownership_certificate:
+        _file.clear_ownership_certificate(out_dir, iso_content)
+
+    if args.ownership_certificate:
+        _file.add_ownership_certificate(
+            out_dir,
+            pkg=args.ownership_certificate,
+        )
+
+    _validate_ovs_and_oc(out_dir)
 
     # If clear bridging fixes requested, remove all bridging fixes before
     # adding new ones
@@ -1237,7 +1545,7 @@ def _coordinate_giso(
                 out_dir,
                 tmp_bridging_dir,
                 iso_version,
-                mdata["architecture"],
+                {pkg.arch for pkg in install_packages},
             )
 
     # Add any of the files that are specified
