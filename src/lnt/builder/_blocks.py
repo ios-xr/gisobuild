@@ -104,7 +104,10 @@ def is_xr_pkg(pkg: _packages.Package) -> bool:
     XR packages have a provides tag for "cisco-iosxr".
 
     """
-    return _get_provides_by_name(pkg, "cisco-iosxr") is not None
+    return (
+        _get_provides_by_name(pkg, "cisco-iosxr") is not None
+        and _get_provides_by_name(pkg, "cisco-rebuilt") is None
+    )
 
 
 def is_xr_installable_pkg(pkg: _packages.Package) -> bool:

@@ -942,20 +942,15 @@ def _check_invalid_pkgs(
         If there are any invalid packages.
 
     """
-    # @@@ Typing added for different_xr_version_pkgs because the code that
-    # populates it was commented out until CSCwq44598 is addressed and so
-    # the type could not be derived by the linting tools.
-    different_xr_version_pkgs: Set[_packages.Package] = set()
+    different_xr_version_pkgs = set()
     pre_supported_version_owner_pkgs = set()
     pre_supported_version_partner_pkgs = set()
     different_arch_pkgs = set()
     for pkg in pkgs:
-        # @@@ Re-enable this code as part of addressing CSCwq44598
-        #
         # Only check XR version if this is an XR package (rather than third
         # party).
-        # if _blocks.is_xr_pkg(pkg) and pkg.version.xr_version != iso_version:
-        #    different_xr_version_pkgs.add(pkg)
+        if _blocks.is_xr_pkg(pkg) and pkg.version.xr_version != iso_version:
+            different_xr_version_pkgs.add(pkg)
         if pkg.is_owner_package and not supports_owner_partner_packages:
             pre_supported_version_owner_pkgs.add(pkg)
         if pkg.is_partner_package and not supports_owner_partner_packages:

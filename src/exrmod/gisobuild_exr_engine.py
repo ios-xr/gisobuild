@@ -103,6 +103,7 @@ ADMIN_SUBSTRING = 'ADMIN'
 HOST_SUBSTRING = 'HOST'
 SMU_SUBSTRING = 'SMU'
 XR_SUBSTRING = 'XR'
+COMMON_SUBSTRING = 'COMMON'
 OPTIONS = None
 DEFAULT_RPM_PATH = 'giso/<rpms>'
 SIGNED_RPM_PATH =  'giso/boot/initrd.img/<rpms>'
@@ -1945,6 +1946,23 @@ class Iso(object):
         self.iso_pkg_fmt_ver = None
         self.shrinked_iso_extract_path = None
         self.matrix_extract_path = None
+        self.has_eltorito_extension = True
+
+    def check_eltorito_extension(self, iso_path: str) -> bool:
+        assert os.path.exists(iso_path)
+        regexes: List[str] = [
+            r"El\s+Torito.+found,\s+boot\s+catalog\s+is\s+in\s+sector"
+        ]
+        output = subprocess.run(["isoinfo", "-d", "-i", iso_path],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        for regex in regexes:
+            if re.search(regex, output.stdout.decode()):
+                logger.debug("ISO %s has El Torito extension" % os.path.basename(iso_path))
+                self.has_eltorito_extension = True
+                return True
+        logger.debug("ISO %s does not have El Torito extension" % os.path.basename(iso_path))
+        self.has_eltorito_extension = False
+        return False
 
     def create_com_iso_path(self, iso_path):
         dirpath = os.path.dirname(iso_path)
@@ -2321,6 +2339,15 @@ class Giso:
         self.ztp_ini_md5sum = None
         self.script_md5sum = None
 
+        self.host_iso_file_name = ""
+        self.cal_iso_file_name = ""
+        self.xr_iso_file_name = ""
+        self.com_iso_file_name=""
+        self.host_iso_md5sum = None
+        self.cal_iso_md5sum = None
+        self.xr_iso_md5sum = None
+        self.com_iso_md5sum = None
+
         self.matrix_extract_path = None
         
     #
@@ -2328,7 +2355,8 @@ class Giso:
     #
 
     def set_giso_info(self, iso_path):
-        self.bundle_iso = Iso() 
+        self.bundle_iso = Iso()
+        self.bundle_iso.check_eltorito_extension(iso_path)
         self.bundle_iso.set_iso_info(iso_path)
         plat = self.get_bundle_iso_platform_name()
         if self.is_extend_giso:
@@ -2960,6 +2988,67 @@ class Giso:
     #
     # Build Golden ISO.
     #
+    def get_matrix_by_version(self, path:str):
+        '''
+        Get the upgrade matrix path by iso version.
+        '''
+        compat_matrix = None
+        iso_version = self.bundle_iso.get_iso_version() # Ex: 7.11.2 or 7.11.2.56I
+        # check and remove the internal iteration number from the version.
+        last_part = iso_version.split('.')[-1]
+        if re.match(r'\d+[A-Z]$', last_part):
+            iso_version = iso_version.rsplit('.', 1)[0]
+
+        compat_matrix = os.path.join(path,"compatibility_matrix_%s.json" % iso_version)
+        if not os.path.exists(compat_matrix):
+            logger.debug("[WARNING] Compatibility matrix %s not found in the upgrade matrix directory %s." %
+                                 (compat_matrix, path))
+        return compat_matrix
+
+    def package_matrix(self):
+        '''
+        Copy the upgrade matrix to the giso's root directory.
+        '''
+        # copy the base iso's upgrade matrices to the giso dir if present.
+        def get_matrix_dest_dir():
+            '''
+            Get the destination directory for the upgrade matrix inside the GISO.
+            Create the directory if it does not exist.
+            '''
+            dest:str = os.path.join(self.giso_dir, "upgrade_matrix")
+            os.makedirs(dest, exist_ok=True)
+            return dest
+        try:
+            if self.matrix_extract_path and os.path.exists(self.matrix_extract_path):
+                dest = get_matrix_dest_dir()
+                for item in os.listdir(self.matrix_extract_path):
+                    s = os.path.join(self.matrix_extract_path, item)
+                    d = os.path.join(dest, item)
+                    if os.path.isdir(s):
+                        shutil.copytree(s, d)
+                    else:
+                        shutil.copy2(s, d)
+                logger.debug("Copied upgrade matrix from %s to %s" % (self.matrix_extract_path, dest))
+            if os.environ.get("MATRIX_INFO_PATH") and os.path.exists(os.environ.get("MATRIX_INFO_PATH")):
+                # copy only the relevant matrix file
+                dest = get_matrix_dest_dir()
+                compat_matrix = self.get_matrix_by_version(os.environ.get("MATRIX_INFO_PATH"))
+                if compat_matrix:
+                    shutil.copy2(compat_matrix, dest)
+                    logger.debug("Copied upgrade matrix from ENV_VAR %s to %s" % (os.environ.get("MATRIX_INFO_PATH"), dest))
+                else:
+                    # Don't raise an error, just log it. MATRIX_INFO_PATH may be leftover from a previous build.
+                    logger.debug("No relevant upgrade matrix found in the MATRIX_INFO_PATH %s" % os.environ.get("MATRIX_INFO_PATH"))
+        except Exception as e:
+            # If the upgrade matrix copy fails, log the error and raise a BridgeSMUError.
+            # Best effort remove the upgrade matrix directory and bridge_smu directory if it exists.
+            if os.path.exists(os.path.join(self.giso_dir, "upgrade_matrix")):
+                shutil.rmtree("%s/upgrade_matrix" % self.giso_dir, ignore_errors=True)
+            if os.path.exists(os.path.join(self.giso_dir, "bridge_smus")):
+                shutil.rmtree("%s/bridge_smus" % self.giso_dir, ignore_errors=True)
+            logger.debug(e, exc_info=True)
+            raise BridgeSMUError("Failed to copy upgrade matrix to GISO: %s" % str(e))
+
     def build_bridgeSMU_into_giso(self):
         """
         Build Bridge SMUs into GISO.
@@ -3006,26 +3095,22 @@ class Giso:
         # We Expect assuming that the variable self.matrix_extract_path is populated with
         # path to the upgrade matrix dir that is present in the iso by this point.
         # if its not populated, raise an error.
+        matrix_path = self.matrix_extract_path
         if "MATRIX_INFO_PATH" in os.environ:
-            self.matrix_extract_path = os.environ["MATRIX_INFO_PATH"]
-        if not self.matrix_extract_path:
+            matrix_path = os.environ["MATRIX_INFO_PATH"]
+        if not matrix_path:
             raise BridgeSMUError("No upgrade matrix found in the input ISO or "
                                  "MATRIX_INFO_PATH environment variable is not set.")
-        if (not os.path.exists(self.matrix_extract_path) or
-            os.path.basename(self.matrix_extract_path.rstrip('/')) != "upgrade_matrix"):
-            raise BridgeSMUError("Upgrade matrix path %s is not valid." % self.matrix_extract_path)
+        if (not os.path.exists(matrix_path) or
+            os.path.basename(matrix_path.rstrip('/')) != "upgrade_matrix"):
+            raise BridgeSMUError("Upgrade matrix path %s is not valid." % matrix_path)
 
         # Step 2: pick the correct upgrade matrix.
-        iso_version = self.bundle_iso.get_iso_version() # Ex: 7.11.2 or 7.11.2.56I
-        # check and remove the internal iteration number from the version.
-        last_part = iso_version.split('.')[-1]
-        if re.match(r'\d+[A-Z]$', last_part):
-            iso_version = iso_version.rsplit('.', 1)[0]
+        compat_matrix = self.get_matrix_by_version(matrix_path)
 
-        compat_matrix = os.path.join(self.matrix_extract_path,"compatibility_matrix_%s.json" % iso_version)
-        if not os.path.exists(compat_matrix):
-            raise BridgeSMUError("Compatibility matrix %s not found in the upgrade matrix directory %s." %
-                                 (compat_matrix, self.matrix_extract_path))
+        if not compat_matrix:
+            raise BridgeSMUError("No relevant upgrade matrix found for the ISO version %s in the upgrade matrix directory %s." %
+                                 (self.bundle_iso.get_iso_version(), matrix_path))
 
         # Step 3: Pick one of the input adapters for the bridge_smu_tool based in the type of input.
         # make sure that the user has not porvided a mix of inputs like DDTS ID and rpm files.
@@ -3079,29 +3164,6 @@ class Giso:
         except Exception as e:
             logger.debug(e, exc_info=True)
             raise BridgeSMUError(str(e))
-
-        # Step 6: copy the upgrade matrix to the GISO.
-        try:
-            if not os.path.exists(os.path.join(self.giso_dir, "upgrade_matrix")):
-                os.mkdir(os.path.join(self.giso_dir, "upgrade_matrix"))
-            if not "MATRIX_INFO_PATH" in os.environ:
-                for file in os.listdir(self.matrix_extract_path):
-                    if file.endswith(".json"):
-                        shutil.copy(os.path.join(self.matrix_extract_path, file),
-                                    os.path.join(self.giso_dir, "upgrade_matrix"))
-            else:
-                # if matrix is passed as an environment variable, copy only the compat matrix.
-                # user most likely doesn't want to copy everything.
-                shutil.copy(compat_matrix, os.path.join(self.giso_dir, "upgrade_matrix"))
-        except Exception as e:
-            # If the upgrade matrix copy fails, log the error and raise a BridgeSMUError.
-            # Best effort remove the upgrade matrix directory and bridge_smu directory if it exists.
-            if os.path.exists(os.path.join(self.giso_dir, "upgrade_matrix")):
-                shutil.rmtree("%s/upgrade_matrix" % self.giso_dir, ignore_errors=True)
-            if os.path.exists(os.path.join(self.giso_dir, "bridge_smus")):
-                shutil.rmtree("%s/bridge_smus" % self.giso_dir, ignore_errors=True)
-            logger.debug(e, exc_info=True)
-            raise BridgeSMUError("Failed to copy upgrade matrix to GISO: %s" % str(e))
 
     def build_giso(self, rpm_db, iso_path):
         rpms = False
@@ -3334,10 +3396,11 @@ class Giso:
             self.update_grub_cfg(self.bundle_iso)
             shutil.copy(logfile, '%s/%s' % (self.giso_dir, 
                                             Giso.SMU_CONFIG_SUMMARY_FILE))
-            #Copy the upgrade matrix files to the top level of GISO
-            dest_dir = os.path.join(self.giso_dir, "upgrade_matrix")
 
             if args.bridge_fixes:
+                # no need to separately copy the upgrade matrix if
+                # bridge SMU packaging is requested. It will be copied
+                # as a part of the bridge SMU packaging.
                 try:
                     self.build_bridgeSMU_into_giso()
                 except BridgeSMUError as e:
@@ -3346,6 +3409,16 @@ class Giso:
                     # should be done in the bridge_smu_tool module or build_bridgeSMU_into_giso func.
                     logger.error("[BRIDGE FAILURE]: Failed to package bridge SMUs into the GISO: %s" % str(e))
                     return -1
+
+            try:
+                self.package_matrix()
+            except BridgeSMUError as e:
+                # All error messages and debug info should have been logged by this point.
+                # Don't do error message manipulation here. anything that needs to be logged
+                # should be done in the bridge_smu_tool module or package_matrix func.
+                logger.error("[MATRIX FAILURE]: Failed to copy upgrade matrix to the GISO: %s" % str(e))
+                return -1
+
 
             #update bzimage for 663/664/702 fretta to support >2GB ISO
             if plat == "ncs5500" and ((self.get_bundle_iso_version() == "6.6.3") or
@@ -3370,7 +3443,10 @@ class Giso:
                 else :
                     self.recreate_initrd_non_nested_platform()
                 self.update_signature(self.giso_dir)
-                if os.path.exists(self.giso_dir+"/boot/grub/stage2_eltorito"):
+
+                self.update_md5sum_in_gisoinfo_file(self.giso_dir)
+
+                if os.path.exists(self.giso_dir+"/boot/grub/stage2_eltorito") and self.bundle_iso.has_eltorito_extension:
                     cmd = "mkisofs -R -uid 0 -gid 0 -b boot/grub/stage2_eltorito -no-emul-boot -input-charset utf-8 \
                         -boot-load-size 4 -boot-info-table -o %s %s" % (self.giso_name, self.giso_dir)
                 else:
@@ -3378,7 +3454,13 @@ class Giso:
                 run_cmd(cmd)
 
             else:
-                if os.path.exists(self.giso_dir+"/boot/grub/stage2_eltorito"):
+                if plat in Giso.NESTED_ISO_PLATFORMS :
+                    self.get_md5sum_of_internal_isos_nested()
+                else:
+                    self.get_md5sum_of_internal_isos_non_nested()
+                self.update_md5sum_in_gisoinfo_file(self.giso_dir)
+
+                if os.path.exists(self.giso_dir+"/boot/grub/stage2_eltorito") and self.bundle_iso.has_eltorito_extension:
                     cmd = "mkisofs -R -uid 0 -gid 0 -b boot/grub/stage2_eltorito -no-emul-boot -input-charset utf-8 \
                             -boot-load-size 4 -boot-info-table -o %s %s" \
                             % (self.giso_name, self.giso_dir)
@@ -3386,7 +3468,7 @@ class Giso:
                     cmd = "mkisofs -R -uid 0 -gid 0 -o %s %s" % (self.giso_name, self.giso_dir)
                 run_cmd(cmd)
         return 0
-            
+
     def build_system_image(self):
         """ extract system_image """
 
@@ -3429,6 +3511,17 @@ class Giso:
                                                       (self.get_bundle_iso_version() == "6.6.4") or
                                                       (self.get_bundle_iso_version() == "7.0.2")):
                self.update_bzimage(self.system_image_extract_path)
+
+            pwd = os.getcwd()
+            temp_dir = tempfile.mkdtemp(dir=pwd)
+            if temp_dir:
+                os.chdir(temp_dir)
+                run_cmd("zcat -f %s%s | cpio -id" % (self.system_image_extract_path,
+                        Iso.ISO_INITRD_RPATH))
+                #calculate md5sum of internal iso
+                self.generate_md5sum_of_internal_iso_files(temp_dir)
+                run_cmd("rm -rf %s" %(temp_dir))
+                os.chdir(pwd)
 
             # Recreate system_image.iso
             if os.path.exists(self.system_image_extract_path+"/boot/grub/stage2_eltorito"):
@@ -3503,6 +3596,8 @@ class Giso:
 
         run_cmd("cp  -f %s/*.yml %s " % (extract_system_image_initrd_path, extract_initrd_r71x))
         os.chdir(extract_initrd_r71x)
+        #calculate md5sum of internal iso
+        self.generate_md5sum_of_internal_iso_files(extract_initrd_r71x)
         cmd = "find . | cpio -o -H newc | python3 %s | gzip > %s/boot/initrd.img"%(CPIO_CHOWN,extract_system_image_initrd_path)
         run_cmd(cmd)
         # Update initrd signature
@@ -3571,12 +3666,76 @@ class Giso:
 
         run_cmd("cp  -f %s/*.yml %s " % (self.giso_dir, new_initrd_path))
 
+        #calculate md5sum of internal iso
+        self.generate_md5sum_of_internal_iso_files(new_initrd_path)
         os.chdir(new_initrd_path)
         cmd = "find . | cpio -o -H newc | python3 %s | gzip > %s/boot/initrd.img"%(CPIO_CHOWN,self.giso_dir)
         run_cmd(cmd)
         os.chdir(pwd)
         # Cleanup
         shutil.rmtree(new_initrd_path)
+
+    def generate_md5sum_of_internal_iso_files(self, temp_dir):
+        """ calculate md5sum of internal iso(host, sysadmin, xr, common) """
+        internal_iso =''
+        internal_isos = []
+
+        internal_iso=("%s/iso/*.iso" %(temp_dir))
+        internal_isos += glob.glob(internal_iso)
+        for int_iso in internal_isos:
+            cmd = "md5sum %s" % (int_iso)
+            result = run_cmd(cmd)
+            file_name = os.path.basename(int_iso)
+            md5sum_val = result["output"].split(" ")[0]
+            if HOST_SUBSTRING.lower() in file_name:
+                self.host_iso_md5sum = md5sum_val
+                self.host_iso_file_name = file_name
+                logger.debug("Host ISO md5sum: %s" %self.host_iso_md5sum)
+            elif SYSADMIN_SUBSTRING.lower() in file_name:
+                self.cal_iso_md5sum = md5sum_val
+                self.cal_iso_file_name = file_name
+                logger.debug("Calvados ISO md5sum: %s" %self.cal_iso_md5sum)
+            elif XR_SUBSTRING.lower() in file_name:
+                self.xr_iso_md5sum = md5sum_val
+                self.xr_iso_file_name = file_name
+                logger.debug("Xr ISO md5sum: %s" %self.xr_iso_md5sum)
+            elif COMMON_SUBSTRING.lower() in file_name:
+                self.com_iso_md5sum = md5sum_val
+                self.com_iso_file_name = file_name
+                logger.debug("Common ISO md5sum: %s" %self.com_iso_md5sum)
+            else:
+                logger.error("Unknown ISO name: %s" %file_name)
+
+    def get_md5sum_of_internal_isos_nested(self):
+        """ calculate md5sum of internal iso(host, sysadmin, xr, common) in nested giso"""
+        pwd = cwd
+        extract_system_image_initrd_path = tempfile.mkdtemp(dir=pwd)
+        # extract giso(system_image.iso) created
+        readiso(self.system_image, extract_system_image_initrd_path)
+        # extract system_image.iso/boot/initrd.img
+        system_image_initrd=("%s/boot/initrd.img"% extract_system_image_initrd_path)
+        extract_initrd_r71x=tempfile.mkdtemp(dir=pwd)
+        os.chdir(extract_initrd_r71x)
+        run_cmd("zcat -f %s | cpio -id" %(system_image_initrd))
+
+        # Md5sum caluclation of Host, calvados, xr, common ISO
+        self.generate_md5sum_of_internal_iso_files(extract_initrd_r71x)
+        os.chdir(pwd)
+        #Cleanup
+        shutil.rmtree(extract_system_image_initrd_path)
+        shutil.rmtree(extract_initrd_r71x)
+
+    def get_md5sum_of_internal_isos_non_nested(self):
+        """ calculate md5sum of internal iso(host, sysadmin, xr, common) in non-nested giso"""
+        if self.get_bundle_shrinked_iso_extract_path() is not None:
+            extracted_bundle_path = self.get_bundle_shrinked_iso_extract_path()
+        else :
+            extracted_bundle_path = self.get_bundle_iso_extract_path()
+
+        # Md5sum caluclation of Host, calvados, xr, common ISO
+        self.generate_md5sum_of_internal_iso_files(extracted_bundle_path)
+        #Cleanup
+        shutil.rmtree(extracted_bundle_path)
 
     def create_sign_env(self):
         """ Pretend to be in workspace as thats a requirement for signing and
@@ -3666,6 +3825,15 @@ class Giso:
         with open("%s/%s" % (path, Giso.ISO_INFO_FILE), 'w') as f:
             f.write(iso_info_raw)
         return
+
+    def update_md5sum_in_gisoinfo_file(self, giso_dir):
+        # Update MD5SUM of internal ISO's(host, sysadmin, xr) in giso_info.txt
+        with open("%s/%s" % (giso_dir, Giso.GISO_INFO_TXT), 'a') as f:
+            f.write("\n\nInternal ISOs MD5SUM:\n")
+            f.write("%s %s\n" % (self.host_iso_file_name, self.host_iso_md5sum))
+            f.write("%s %s\n" % (self.cal_iso_file_name, self.cal_iso_md5sum))
+            f.write("%s %s\n" % (self.xr_iso_file_name, self.xr_iso_md5sum))
+            f.write("%s %s\n" % (self.com_iso_file_name, self.com_iso_md5sum))
 
     def __enter__(self):
         return self
