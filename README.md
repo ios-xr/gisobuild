@@ -2,22 +2,26 @@
 
 ## Usage
 
-```
+```text
 usage: gisobuild.py [-h] [--iso ISO] [--repo REPO [REPO ...]]
                     [--bridging-fixes BRIDGE_FIXES [BRIDGE_FIXES ...]]
                     [--xrconfig XRCONFIG] [--ztp-ini ZTP_INI] [--label LABEL]
                     [--no-label] [--out-directory OUT_DIRECTORY]
                     [--create-checksum] [--yamlfile CLI_YAML] [--clean]
                     [--pkglist PKGLIST [PKGLIST ...]]
-                    [--key-request KEY_REQUEST] [--docker] [--bes-logging]
-                    [--script SCRIPT] [--x86-only] [--migration] [--optimize]
-                    [--full-iso]
+                    [--key-request KEY_REQUEST] [--docker] [--script SCRIPT]
+                    [--x86-only] [--migration] [--optimize] [--full-iso]
                     [--remove-packages REMOVE_PACKAGES [REMOVE_PACKAGES ...]]
                     [--skip-usb-image] [--copy-dir COPY_DIRECTORY]
                     [--clear-bridging-fixes] [--verbose-dep-check] [--debug]
-                    [--isoinfo ISOINFO] [--image-script IMAGE_SCRIPT]
+                    [--isoinfo ISOINFO]
                     [--only-support-pids ONLY_SUPPORT_PIDS [ONLY_SUPPORT_PIDS ...]]
-                    [--clear-key-request] [--no-buildinfo] [--version]
+                    [--clear-key-request]
+                    [--ownership-vouchers OWNERSHIP_VOUCHERS]
+                    [--clear-ownership-vouchers]
+                    [--ownership-certificate OWNERSHIP_CERTIFICATE]
+                    [--clear-ownership-certificate] [--no-buildinfo]
+                    [--version]
 
 Utility to build Golden ISO for IOS-XR.
 
@@ -26,29 +30,30 @@ optional arguments:
   --iso ISO             Path to an input LNT ISO, EXR mini/full ISO, or a
                         GISO.
   --repo REPO [REPO ...]
-                        Path to RPM repository. For LNT, user can specify
-                        .rpm, .tgz, .tar filenames, or directories. RPMs are
-                        only used if already included in the ISO, or specified
-                        by the user via the --pkglist option.
+                        List of paths to RPM repositories. For LNT, user can
+                        specify .rpm, .tgz, .tar filenames, or directories.
+                        RPMs are only used if already included in the ISO, or
+                        specified by the user via the --pkglist option.
   --bridging-fixes BRIDGE_FIXES [BRIDGE_FIXES ...]
-                        Bridging rpms to package. For EXR, takes from-release
-                        or rpm names; for LNT, the user can specify the same
+                        Bridging RPMs to package. For EXR, takes from-release
+                        or RPM names; for LNT, the user can specify the same
                         file types as for the --repo option.
   --xrconfig XRCONFIG   Path to XR config file
   --ztp-ini ZTP_INI     Path to user ztp ini file
   --label LABEL, -l LABEL
                         Golden ISO Label
-  --no-label            Indicates that no label at all should be added to the
-                        GISO
+  --no-label            Indicates that no label should be added to the GISO,
+                        and any existing label should be removed
   --out-directory OUT_DIRECTORY
-                        Output Directory
+                        Directory to put all artifacts of the GISO build
   --create-checksum     Write a file with the checksum and size of the output
                         file(s)
-  --yamlfile CLI_YAML   Cli arguments via yaml
+  --yamlfile CLI_YAML   Cli arguments via yaml. See the files in
+                        ./sample_yaml/ for examples
   --clean               Delete output dir before proceeding
   --pkglist PKGLIST [PKGLIST ...]
                         Packages to be added to the output GISO. For eXR:
-                        optional rpm or smu to package. For LNT: either full
+                        optional RPM or SMU to package. For LNT: either full
                         package filenames or package names for user
                         installable packages can be specified. Full package
                         filenames can be specified to choose a particular
@@ -62,17 +67,16 @@ optional arguments:
   --docker, --use-container
                         Build GISO in container environment.Pulls and run pre-
                         built container image to build GISO.
-  --bes-logging         Output build environment security logs to console
   --version             Print version of this script and exit
 
 EXR only build options:
-  --script SCRIPT       Path to user executable script executed as part of
-                        bootup post activate.
-  --x86-only            Use only x86_64 rpms even if other architectures are
+  --script SCRIPT       Path to user executable script, executed as part of
+                        boot, post activate.
+  --x86-only            Only use x86_64 RPMs, even if other architectures are
                         applicable.
-  --migration           To build Migration tar only for ASR9k
+  --migration           Build migration tar (only valid for ASR9k)
   --optimize            Optimize GISO by recreating and resigning initrd
-  --full-iso            To build full iso only for xrv9k
+  --full-iso            Build full ISO (only valid for xrv9k)
 
 LNT only build options:
   --remove-packages REMOVE_PACKAGES [REMOVE_PACKAGES ...]
@@ -81,21 +85,16 @@ LNT only build options:
                         names, and must be the whole package name, e.g: xr-bgp
   --skip-usb-image      Do not build the USB image
   --copy-dir COPY_DIRECTORY
-                        Copy built artefacts to specified directory if
+                        Copy built artifacts to specified directory if
                         provided. The specified directory must already exist,
                         be writable by the builder and must not contain a
-                        previously built artefact with the same name.
+                        previously built artifact with the same name.
   --clear-bridging-fixes
                         Remove all bridging bugfixes from the input ISO
   --verbose-dep-check   Verbose output for the dependency check.
   --debug               Output debug logs to console
   --isoinfo ISOINFO     User specified isoinfo executable to use instead of
                         the default version
-  --image-script IMAGE_SCRIPT
-                        User specified image.py script to be used for
-                        packing/unpacking instead of the version extracted
-                        from the ISO. It will not be inserted into the GISO.
-                        Intended for debugging purposes only.
   --only-support-pids ONLY_SUPPORT_PIDS [ONLY_SUPPORT_PIDS ...]
                         Support only these hardware PIDs in the output ISO
                         (e.g. '8800-RP' '8800-LC-36FH' '8800-LC-48H'); other
@@ -104,6 +103,18 @@ LNT only build options:
                         ISO. Do not use this option before discussing with
                         Cisco support.
   --clear-key-request   Remove all key requests from the input ISO
+  --ownership-vouchers OWNERSHIP_VOUCHERS
+                        Ownership vouchers to package to be used when
+                        validating owner and partner RPMs.
+  --clear-ownership-vouchers
+                        Remove all ownership vouchers from the input ISO, if
+                        there are any present
+  --ownership-certificate OWNERSHIP_CERTIFICATE
+                        Ownership certificate to package to be used when
+                        validating owner and partner RPMs.
+  --clear-ownership-certificate
+                        Remove the ownership certificate from the input ISO,
+                        if there is one present
   --no-buildinfo        Do not update the build metadata in mdata.json with
                         the GISO build information
 
@@ -116,12 +127,11 @@ mandatory IOS-XR packages for a given platform and, separately, a set of
 optional packages and software patches for any bug fixes (SMU).
 Optional packages and SMUs are in RPM packaging format.
 
-The Golden ISO tool creates an ISO containing the full contents of
+The Golden ISO (GISO) tool creates an ISO containing the full contents of
 the mini/base ISO, together with optional packages and SMU of the user's
 choice. Once the Golden ISO is created, it can be used either for iPXE booting
 a router or for SU (system upgrade) from the current running version to
 a new version of IOS-XR.
-
 
 ### Reducing ISO size
 
@@ -150,35 +160,86 @@ Key requests (AKA key packages) that should be onboarded for validating owner
 and partner RPMs can be specified using the `--key-request <file>` argument and
 removed using `--clear-key-request`.
 
+Key requests must be provided as a single file. Note that when you use the
+`--key-request` argument, any key request in the input GISO will be replaced.
+
 For instructions on creating and verifying key requests, see the
 [key-package-scripts repo](https://github.com/ios-xr/key-package-scripts/tree/master).
+
+### Ownership vouchers/certificates
+
+#### Ownership vouchers
+
+Ownership vouchers can be provided using the `--ownership-vouchers` argument,
+with either a single OV file (with a `.vcj` extension), or a tarball (with
+extension `.tar`, `.tar.gz`, or `.tgz`) containing one or more ownership
+vouchers. If the input GISO already has OVs included, those, as well as any OVs
+passed in via the `--ownership-vouchers` argument, will be included in the output
+GISO.
+
+Note that if the given ownership voucher (specifically, the `.vcj` file, whether
+that's given alone, or as part of a tarball) has the same name as one inside the
+input GISO, the new OV will be retained, and the one inside the GISO will be
+overwritten.
+
+Ownership vouchers can be cleared from the input GISO using the
+`--clear-ownership-vouchers` argument. If this argument is used when there is no
+OV in the input image, the build will proceed as normal. Combining this argument
+with the `--ownership-vouchers` argument will replace all OVs on the input GISO
+with the OVs referenced by the `--ownership-vouchers` argument.
+
+#### Ownership certificates
+
+An ownership certificate can be provided using the `--ownership-certificate`
+argument, which accepts one `.cms` file. If an input GISO already has an OC
+installed, it will be overwritten.
+
+An ownership certificate can be removed from the input GISO using the
+`--clear-ownership-certificate` argument. If this argument is used when there is
+no OC in the input image, the build will proceed as normal. Using this argument
+with the `--ownership-certificate` argument is redundant, as the latter also
+removes the ownership certificate in the input GISO (if one exists).
+
+#### Validation
+
+The output GISO must either have OVs and an OC, or neither OVs nor OCs. It is
+not possible to boot an image that has OVs without an OC or vice-versa. If it
+is attempted to build such an image, the build will fail.
+
+OCs and OVs are linked, so it is important to supply the correct certificate for
+the vouchers given. It is not possible to check whether the OC and OVs match at
+GISO build-time, so the user of the GISO build tool will need to check that the
+correct certificate and vouchers are given. Otherwise, there will be no
+indication of an incompatibility until the GISO fails to boot.
 
 ## Requirements
 
 This tool has the following executable requirements:
-* python3 >= 3.6
-* rpm >= 4.14
-* cpio >= 2.10
-* gzip >= 1.9
-* createrepo_c
-* file
-* isoinfo
-* mkisofs
-* mksquashfs
-* openssl
-* unsquashfs
-* 7z (Optional - but functionality may be reduced without)
-* iso-read (Optional - but functionality may be reduced without)
-* zip (Optional - but functionality may be reduced without)
-* unzip (Optional - but functionality may be reduced without)
+
+- python3 >= 3.6
+- rpm >= 4.14
+- cpio >= 2.10
+- gzip >= 1.9
+- createrepo_c
+- file
+- isoinfo
+- mkisofs
+- mksquashfs
+- openssl
+- unsquashfs
+- 7z (Optional - but functionality may be reduced without)
+- iso-read (Optional - but functionality may be reduced without)
+- zip (Optional - but functionality may be reduced without)
+- unzip (Optional - but functionality may be reduced without)
 
 It also requires the following Python (>= 3.6) modules:
-* dataclasses
-* defusedxml
-* distutils
-* packaging
-* rpm
-* yaml
+
+- dataclasses
+- defusedxml
+- distutils
+- packaging
+- rpm
+- yaml
 
 ## Invocation
 
@@ -188,15 +249,18 @@ and the ability to pull the published 'cisco-xr-gisobuild' image from Docker
 Hub, in which case the above dependencies are met by the published image.
 
 To run natively on a Linux host, the following distributions have been tested.
-* Alma Linux 8
-* Fedora 34
-* Debian 11.2
+
+- Alma Linux 8
+- Fedora 34
+- Debian 11.2
 
 On a native Linux system, which does not have all dependencies met,
 the tool dependencies can be installed on supported distributions above
 by running the following command (possibly via sudo)
-              
+
+```bash
     ./setup/prep_dependency.sh
+```
 
 To load and run the pre-built cisco-xr-gisobuild docker image, ensure that the
 docker service is enabled and it's possible to pull and run published docker
@@ -204,38 +268,53 @@ images.
 
 Run the following command to check docker service parameters.
 
+```bash
     docker info
+```
 
 Running the tool:
 
 To run natively on a linux host which has dependency requirements met:
 
+```bash
     ./src/gisobuild.py --iso <input iso> --repo <rpm repo1 rpm_repo2> \
         --pkglist <pkg1 pkg2 pkg3> --bridging-fixes <smu1 smu2 smu3> \
         --xrconfig <config.cfg> --ztp-ini <ztp.ini> --script <user_script.sh> \
         --label <label> --out-directory <out_directory> --clean
+```
 
 The tool has a helpful usage info which lists down the options supported.
 
-When user does not want to specify the inputs via cli, an alternate would be to populate the yaml file template
-provided in the toolkit and pass the same via:
+When user does not want to specify the inputs via CLI, an alternate would be to
+populate the yaml file template provided in the toolkit and pass the same via:
 
+```bash
     ./src/gisobuild.py --yamlfile <input_yaml_cfg>
+```
 
-To override any input in the yaml config file, please use the corresponding cli option and parameter.
+To override any input in the yaml config file, please use the corresponding CLI
+option and parameter.
 
+```bash
     ./src/gisobuild.py --yamlfile <input_yaml_cfg> --label <new_label>
+```
 
-The above command will override the label specified in yaml file with new option provided via cli option --label.
+The above command will override the label specified in yaml file with new option
+provided via the CLI option --label.
 
-When the host machine does not have its dependency met, but allows pulling and running docker images, enable 
-docker option in yaml file to true and run as (possible with GISO for eXR variants of IOS-XR):
+When the host machine does not have its dependency met, but allows pulling and
+running docker images, enable docker option in yaml file to true and run as
+(possible with GISO for eXR variants of IOS-XR):
 
+```bash
     ./src/gisobuild.py --yamlfile <input_yaml_cfg>
+```
 
 where input_yaml_cfg has:
 
+```bash
     docker: true
+```
 
 Output:
 
@@ -251,19 +330,19 @@ specified in `--out-directory`. The default if not specified is
 package name refers to the "user installable" RPM and is the string prefix
 common to all RPMs associated with a block.
 
-You can put all your bugfixes and any optional packages in the same repository,
-and pass that to the CLI using the `--repo` flag. The tool will pick the correct
-RPMs to add to the GISO using the following logic:
+You can put all your bugfixes and any optional packages in one or more
+repositories, and pass them to the CLI using the `--repo` flag. The tool will
+pick the correct RPMs to add to the GISO using the following logic:
 
 1. If no packages are specified via the `--pkglist` flag, then the latest
-of any packages in the repository that upgrade packages already in the input ISO
-will be included in the output GISO. Other optional packages, including those
-part of bugfixes that were incorporated into the GISO, will not be added to the
-output GISO.
+of any packages in the repositories that upgrade packages already in the input
+ISO will be included in the output GISO. Other optional packages, including
+those part of bugfixes that were incorporated into the GISO, will not be added
+to the output GISO.
 1. If any optional package names are given via the `--pkglist` flag, where the
 package is not part of the input ISO, the latest version of the package in the
-specified repository will be added to the output GISO. For XR packages all other
-RPMs in the same block will also be added to the output GISO.
+specified repositories will be added to the output GISO. For XR packages all
+other RPMs in the same block will also be added to the output GISO.
 1. If full package filenames are given via the `--pkglist` flag, the specific
 version passed in will be included in the output GISO. If the package is part of
 a block, then all the packages in the block are added.
@@ -311,14 +390,6 @@ present in the given repository will be included in the GISO without needing to
 specify them.
 
 ```text
-./gisobuild.py --iso /path/to/iso/8000-x64-24.3.1.iso --repo /path/to/repo/
-```
-
-Both RPMs and bugfixes can included in the GISO in a single command, as long as
-they are all in the repository. So the command above would also work if my
-repository looked like:
-
-```text
 $ tree /path/to/repo/
 /path/to/repo/
 ├── bugfixes
@@ -336,13 +407,42 @@ $ tree /path/to/repo/
     │   ├── xr-telnet-24.3.1.22Iv1.0.0-1.x86_64.rpm
     │       ...
         ...
+$ ./gisobuild.py --iso /path/to/iso/8000-x64-24.3.1.iso --repo /path/to/repo/bugfixes /path/to/repo/optional-rpms/cdp /path/to/repo/optional-rpms/telnet
+```
+
+Both RPMs and bugfixes can be included in the GISO in a single repository, so,
+for the same repository structure as above, the following command will also
+work:
+
+```text
+./gisobuild.py --iso /path/to/iso/8000-x64-24.3.1.iso --repo /path/to/repo/
+```
 
 ## Note: older version of the tool
 
 The legacy eXR python2-based gisobuild utility is available at:
 
- https://github.com/ios-xr/gisobuild/tree/gisobuild-exr-legacy
+[https://github.com/ios-xr/gisobuild/tree/gisobuild-exr-legacy](https://github.com/ios-xr/gisobuild/tree/gisobuild-exr-legacy)
 
 The command to pull the above code base is:
 
+```bash
     git clone  --branch gisobuild-exr-legacy https://github.com/ios-xr/gisobuild/
+```
+
+## Resolving issues
+
+If something goes wrong, the log files should provide some insight. They are
+stored in `./output_gisobuild/logs/` (unless a different directory was passed to
+`--out-directory`). The following files are particularly of interest:
+
+- `gisobuild.log` is where one would find the logs for the main gisobuild
+process, and is generally the first point of call for any issues.
+- `iso_image.log` contains logs about packing, unpacking and inspecting GISOs
+- `isols.log` for anything related to the `isols.py` tool
+- `isodiff.log` for anything related to the `isodiff.py` tool
+
+As well as these files, certain CLI arguments, such as `--debug` and
+`--verbose-dep-check` may be helpful in finding out what is taking place during
+the GISO build. Note that, by default, the `gisobuild.log` records debug-level
+logs.

@@ -1,7 +1,7 @@
 # -----------------------------------------------------------------------------
 # BSD 3-Clause License
 #
-# Copyright (c) 2024-2025, Cisco Systems, Inc. and its affiliates
+# Copyright (c) 2022-2025, Cisco Systems, Inc. and its affiliates
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -29,13 +29,39 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 # -----------------------------------------------------------------------------
+"""
+This module provides the Bridge SMU Packaging functionality.
+The main class is `BridgeSMUPackager`, which handles the packaging of bridge SMUs based on the provided input.
+Since multiple types of inputs are supported, This module also includes a handy set of adapters to
+convert various input formats into a unified `BridgeSMUInput` format.
 
-"""Constants specific to eXR GISOBuild only."""
+USAGE:
+1. Select the appropriate adapter based on your input type. and call the `adapt` method to get a
+   `BridgeSMUInput` object.
+2. Create an instance of `BridgeSMUPackager` with the `BridgeSMUInput` object.
+3. Call the `package` method to start the packaging process.
+"""
 
-GISOBUILD_PREREQ_EXECUTABLES = [
-    'mount', 'rm', 'cp', 'umount', 'zcat', 'chroot', 'mkisofs'
+__all__ = [
+    "BridgeSMUInput",
+    "BridgeSMUPackager",
+    "InvalidInputError",
+    "InputParameter",
+    "MatrixError",
+    "PackagerError",
+    "BridgeSMUToolError",
+    "Adapter",
+    "DDTSAdapter",
+    "RpmAdapter",
+    "ReleaseAdapter",
 ]
 
-GISOBUILD_PREREQ_PYTHONMODULES = [
-    "yaml"
-]
+from .bridge_smu_packager import BridgeSMUInput, BridgeSMUPackager
+from .adapters import Adapter, DDTSAdapter, RpmAdapter, ReleaseAdapter
+from .errors import (
+    InputParameter,
+    MatrixError,
+    PackagerError,
+    InvalidInputError,
+    BridgeSMUToolError,
+)

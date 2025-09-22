@@ -1,22 +1,36 @@
 # -----------------------------------------------------------------------------
+# BSD 3-Clause License
+#
+# Copyright (c) 2021-2025, Cisco Systems, Inc. and its affiliates
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# 1. Redistributions of source code must retain the above copyright notice, this
+#    list of conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright notice,
+#    this list of conditions and the following disclaimer in the documentation
+#    and/or other materials provided with the distribution.
+#
+# 3. Neither the name of the [organization] nor the names of its contributors
+#    may be used to endorse or promote products derived from this software
+#    without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+# -----------------------------------------------------------------------------
 
-""" Tool to extract ISO information.
-
-Copyright (c) 2022-2023 Cisco and/or its affiliates.
-This software is licensed to you under the terms of the Cisco Sample
-Code License, Version 1.1 (the "License"). You may obtain a copy of the
-License at
-
-        https://developer.cisco.com/docs/licenses
-
-All use of the material herein must be in accordance with the terms of
-the License. All rights not expressly granted by the License are
-reserved. Unless required by applicable law or agreed to separately in
-writing, software distributed under the License is distributed on an "AS
-IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
-or implied.
-
-"""
+"""Tool to extract ISO information."""
 
 __all__ = ("run",)
 
@@ -210,6 +224,50 @@ def display_key_request(iso: image.Image, *, print_json: bool = False) -> None:
     else:
         if key_request:
             print(key_request)
+
+
+def display_ownership_vouchers(
+    iso: image.Image, *, print_json: bool = False
+) -> None:
+    """
+    Provide the path to the ownership vouchers contained in the ISO.
+
+    :param iso:
+        The ISO to query.
+
+    :param print_json:
+        Print the output in JSON format.
+
+    """
+    ownership_vouchers = iso.get_ownership_vouchers().strip()
+
+    if print_json:
+        _print_json_data([ownership_vouchers])
+    else:
+        if ownership_vouchers:
+            print(ownership_vouchers)
+
+
+def display_ownership_certificate(
+    iso: image.Image, *, print_json: bool = False
+) -> None:
+    """
+    Provide the path to the ownership certificate contained in the ISO.
+
+    :param iso:
+        The ISO to query.
+
+    :param print_json:
+        Print the output in JSON format.
+
+    """
+    ownership_certificate = iso.get_ownership_certificate().strip()
+
+    if print_json:
+        _print_json_data([ownership_certificate])
+    else:
+        if ownership_certificate:
+            print(ownership_certificate)
 
 
 def list_packages(
@@ -434,6 +492,10 @@ def _run_isols_cmds(args: argparse.Namespace) -> None:
         )
     elif args.KEYREQUEST:
         display_key_request(iso, print_json=args.json)
+    elif args.OWNERSHIP_VOUCHERS:
+        display_ownership_vouchers(iso, print_json=args.json)
+    elif args.OWNERSHIP_CERTIFICATE:
+        display_ownership_certificate(iso, print_json=args.json)
     elif args.GROUPS:
         list_packages(iso, groups=True, print_json=args.json)
     elif args.DUMP_MDATA:
@@ -550,6 +612,20 @@ def _parse_args(argv: List[str]) -> argparse.Namespace:
         dest="KEYREQUEST",
         default=False,
         help="Provide the key request in the ISO",
+        action="store_true",
+    )
+    isols_group.add_argument(
+        "--ownership-vouchers",
+        dest="OWNERSHIP_VOUCHERS",
+        default=False,
+        help="List ownership vouchers in the ISO",
+        action="store_true",
+    )
+    isols_group.add_argument(
+        "--ownership-certificate",
+        dest="OWNERSHIP_CERTIFICATE",
+        default=False,
+        help="Provide the ownership certificate in the ISO",
         action="store_true",
     )
     isols_group.add_argument(
